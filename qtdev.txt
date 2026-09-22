@@ -1,0 +1,48 @@
+Act as a Lead Quantitative Developer and Full-Stack FinTech Engineer. Your objective is to architect and generate the codebase for a high-frequency, machine-learning-driven algorithmic trading system.
+
+Please reference the existing backend logic, data structures, and state definitions found in the file "Trade Engine " to ensure all data types and API contracts match exactly.
+
+**1. Machine Learning Pipeline & Data Engineering**
+Implement a robust pipeline resilient to non-stationary financial data, strictly avoiding overfitting and look-ahead bias.
+
+* **Stationarity Processing:** Transform raw price series into stationary features using Fractional Differencing. Implement the weight decay formula to preserve memory while achieving stationarity:
+
+$$w_k = -w_{k-1} \frac{d - k + 1}{k}$$
+
+* **Validation Protocol:** Implement Combinatorial Purged Cross-Validation (CPCV). Ensure the pipeline automatically purges training data points that overlap with the testing set timeframe, applying an embargo period after the test set to prevent information leakage.
+* **Regime Detection:** Integrate a Gaussian Hidden Markov Model (HMM) to classify live market states (e.g., mean-reverting, trending, high-volatility). The model must dynamically update the feature weights (L1/L2 regularization penalties) based on the active state matrix.
+
+**2. Risk Management & Position Sizing**
+Isolate the risk module from the prediction logic. The risk engine must have final authority over execution.
+
+* **Optimal Allocation:** Calculate dynamic position sizing using the Kelly Criterion to maximize logarithmic wealth growth, adjusting for the asset's historical volatility:
+
+$$f^* = \frac{p(b+1)-1}{b}$$
+
+```
+*(Where \(p\) is the probability of a win, and \(b\) is the proportion of the bet gained with a win).*
+
+```
+
+* **Circuit Breakers:** Hardcode global account stop-losses at a 3% daily drawdown and 10% monthly drawdown. If triggered, emit a global event to cancel all open limit orders and submit market orders to flatten active positions.
+
+**3. Dynamic Execution & Microstructure Logic**
+Optimize entries and exits using Limit Order Book (LOB) dynamics rather than static price targets.
+
+* **Adaptive Exits:** Implement an ATR-based trailing stop for active positions. The stop distance must scale linearly with volatility.
+
+$$Stop_{price} = Price_{entry} \pm (k \times ATR_n)$$
+
+* **Scaled Profit Taking:** Program a progressive exit manager. Execute 40% position exits at $+1\sigma$ (Standard Deviation) of the expected move, 30% at $+2\sigma$, and leave 30% running on a tight order-flow exhaustion trigger.
+* **Microstructure Entries:** Analyze the LOB bid-ask imbalance ($\rho$). Delay algorithmic entry signals until local liquidity is sufficient and $\rho > 0.3$ (buy pressure) to minimize slippage. Route large allocations through a Time-Weighted Average Price (TWAP) execution function.
+
+**4. Frontend Architecture (Dashboard UI/UX)**
+Build the presentation layer to visualize the "Trade Engine " telemetry with zero latency.
+
+* **Tech Stack:** React (Next.js), Tailwind CSS, and shadcn/ui.
+* **Primary Visualization:** Implement `tradingview-lightweight-charts` within a responsive React wrapper. It must render historical OHLCV data and accept real-time candlestick updates without full DOM re-renders.
+* **State Management & Streaming:** Use `Zustand` to manage the live order book state, active positions, and PnL. Establish a WebSocket connection to stream tick-level updates directly from the backend to the charting component.
+* **Widgets:** Create modular components for (1) A depth chart / live LOB, (2) System log tables for order execution statuses, and (3) Recharts-based equity curve visualizations.
+
+Provide the optimal directory structure, the core Python classes for the ML validation/risk modules, and the Next.js React components for the real-time charting interface.
+

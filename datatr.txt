@@ -1,0 +1,128 @@
+================================================================================
+  DATA TRANSFORMATION WORKFLOW
+  I/O Payloads at Each Stage of the TEDENG Pipeline
+================================================================================
+
+--------------------------------------------------------------------------------
+1. DATA PIPELINE OUTPUT  (Input to the Prediction Engine / Brain)
+--------------------------------------------------------------------------------
+The data pipeline calculates stationary features and passes a raw feature
+vector to the Prediction Engine's pre-processor via shared memory or socket.
+
+JSON
+{
+  "timestamp": 1698245612.405,
+  "instrument": "BTC-USD",
+  "features": {
+    "frac_diff_price_1m": 0.0452,
+    "garch_vol_5m": 0.0012,
+    "order_book_imbalance": -0.24,
+    "rsi_14": 42.1
+  }
+}
+
+--------------------------------------------------------------------------------
+2. CORE BRAIN OUTPUT  (Standardized Signal → Message Broker)
+--------------------------------------------------------------------------------
+The pre-processor normalizes the features. The ensemble models (Ridge,
+XGBoost, LSTM) generate independent predictions. The meta-aggregator weights
+them by detected regime. The Signal Standardizer formats the result into a
+unified payload and publishes it to the Message Broker.
+
+JSON
+{
+  "signal_id": "sig_98a7f62b",
+  "timestamp_generated": 1698245612.482,
+  "instrument": "BTC-USD",
+  "direction_magnitude": 0.65,
+  "confidence_score": 0.82,
+  "regime_flag": "high_volatility",
+  "latency_ms": 77
+}
+
+  Field Notes:
+    direction_magnitude : [-1.0, +1.0]  negative = short, positive = long
+    confidence_score    : [0.0,  1.0]   used by Kelly Criterion in EE
+    regime_flag         : drives meta-aggregator weight selection
+    latency_ms          : DP → SS processing time
+
+--------------------------------------------------------------------------------
+3. EXECUTION ENGINE OUTPUT  (Proposed Order → Risk Guard)
+--------------------------------------------------------------------------------
+The Execution Engine pulls the signal from the broker, applies the Kelly
+Criterion (scaled by confidence_score) and Risk Parity sizing, then
+constructs a formal order proposal for the Risk Guard.
+
+JSON
+{
+  "order_id": "ord_55b3c19x",
+  "signal_id": "sig_98a7f62b",
+  "instrument": "BTC-USD",
+  "action": "BUY",
+  "order_type": "LIMIT",
+  "price": 34150.00,
+  "quantity": 0.15,
+  "portfolio_allocation_pct": 2.5
+}
+
+  Field Notes:
+    quantity                : derived from Kelly fraction × account equity
+    portfolio_allocation_pct: % of total portfolio this order represents
+    order_type              : LIMIT | MARKET | STOP_LIMIT
+
+--------------------------------------------------------------------------------
+4. RISK GUARD EVALUATION  (Order State → OMS or DROP)
+--------------------------------------------------------------------------------
+The Risk Guard checks the proposed order against global limits in config.py.
+
+  Checks performed:
+    - current_drawdown < max_drawdown_allowed
+    - current_exposure + portfolio_allocation_pct < max_exposure_pct
+    - instrument-level concentration limit
+    - VaR budget remaining
+
+  APPROVED path  →  forwarded to OMS for execution
+  REJECTED path  →  dropped; workflow terminates for this signal
+
+JSON  (APPROVED example)
+{
+  "order_id": "ord_55b3c19x",
+  "signal_id": "sig_98a7f62b",
+  "instrument": "BTC-USD",
+  "action": "BUY",
+  "order_type": "LIMIT",
+  "price": 34150.00,
+  "quantity": 0.15,
+  "portfolio_allocation_pct": 2.5,
+  "risk_state": "APPROVED",
+  "risk_check_timestamp": 1698245612.501,
+  "checks_passed": ["drawdown_ok", "exposure_ok", "concentration_ok", "var_ok"]
+}
+
+JSON  (REJECTED example)
+{
+  "order_id": "ord_55b3c19x",
+  "signal_id": "sig_98a7f62b",
+  "instrument": "BTC-USD",
+  "risk_state": "REJECTED",
+  "risk_check_timestamp": 1698245612.501,
+  "failed_check": "exposure_limit",
+  "detail": "current_exposure 18.3% + 2.5% would exceed max_exposure 20.0%"
+}
+
+================================================================================
+  END-TO-END LATENCY BUDGET  (indicative)
+================================================================================
+
+  Stage                          Cumulative Latency
+  DP  → PP (feature delivery)    ~  5 ms
+  PP  → Ensemble models          ~ 20 ms
+  Ensemble → MA → SS             ~ 77 ms   (latency_ms in signal payload)
+  SS  → MB (publish)             ~  2 ms
+  MB  → EE (consume)             ~  3 ms
+  EE  → RG                       ~  5 ms
+  RG  → OMS (if APPROVED)        ~  5 ms
+                                 ----------
+  Total (target)                 < 120 ms
+
+================================================================================

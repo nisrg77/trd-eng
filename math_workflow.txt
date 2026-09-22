@@ -1,0 +1,65 @@
+===============================================================================
+TEDENG — FORKED QUANTITATIVE MATHEMATICAL & LOGIC WORKFLOW
+===============================================================================
+
+1. FEATURE ENGINEERING & FRACTIONAL DIFFERENCING FORK
+-------------------------------------------------------------------------------
+[A] US Stock Futures (Session-Aware Fractional Differencing):
+    If Time_delta > 48 Hours (Weekend Market Gap):
+        Pause decay recursion weight convolution:
+            w_k = -w_{k-1} * (d - k + 1) / k
+        Prevents artificial Friday-to-Monday volatility spikes.
+
+[B] Crypto Perpetuals (Continuous Fractional Differencing):
+    Continuous 24/7 time series memory decay calculation.
+
+
+2. GAUSSIAN HMM REGIME LIKELIHOOD FORK
+-------------------------------------------------------------------------------
+[A] US Stock Futures Model Calibration:
+        Volatility Threshold: garch_vol > 0.015 (1.5% daily move triggers High Volatility)
+
+[B] Crypto Perpetuals Model Calibration:
+        Volatility Threshold: garch_vol > 0.040 (4.0% daily move triggers High Volatility)
+        Prevents false volatility alarms caused by standard intraday crypto noise.
+
+
+3. SEPARATED RISK MANAGEMENT & CIRCUIT BREAKERS
+-------------------------------------------------------------------------------
+[A] Unified Kelly Criterion Sizing:
+        f* = (p * (b + 1) - 1) / b
+        f_half = 0.5 * f* (Capped at 20% max allocation)
+
+[B] Separated Circuit Breakers:
+        - US Stock Futures: Strict 3% Daily Drawdown Limit ($300 cap on $10,000 equity)
+        - Crypto Perpetuals: 6% Daily Drawdown Limit
+
+
+4. SEPARATED WORKFLOW FLOWCHART (MERMAID)
+-------------------------------------------------------------------------------
+```mermaid
+flowchart TD
+    Data[Market Ticks Data Stream] --> AssetSplit{Asset Class?}
+
+    AssetSplit -- US Stock Futures --> US_FD["Session-Aware FracDiff (Pause decay on >48h gaps)"]
+    AssetSplit -- Crypto Perpetuals --> CR_FD["Continuous 24/7 FracDiff"]
+
+    US_FD --> US_HMM["US Futures HMM Model (1.5% Vol Threshold)"]
+    CR_FD --> CR_HMM["Crypto HMM Model (4.0% Vol Threshold)"]
+
+    US_HMM & CR_HMM --> Kelly["Kelly Criterion Position Sizing: f* = (p(b+1) - 1)/b"]
+
+    Kelly --> RiskSplit{Asset Class Risk Guard?}
+
+    RiskSplit -- US Stock Futures --> CB_US{"Daily Drawdown >= 3% ($300 Limit)?"}
+    RiskSplit -- Crypto Perpetuals --> CB_CR{"Daily Drawdown >= 6% Limit?"}
+
+    CB_US -- YES --> FLATTEN_US["EMERGENCY FLATTEN: Liquidate US Futures"]
+    CB_CR -- YES --> FLATTEN_CR["EMERGENCY FLATTEN: Liquidate Crypto"]
+
+    CB_US -- NO --> OMS["Execute OMS 10x Futures Positions with ATR Trailing Stop"]
+    CB_CR -- NO --> OMS
+```
+
+Math Workflow Image updated at: d:\New folder\TEDENG\math_workflow.png
+===============================================================================

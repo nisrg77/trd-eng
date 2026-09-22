@@ -1,0 +1,267 @@
+/* services/style.css — Premium Dashboard Theme */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* Global Reset */
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif !important;
+    background-color: #0b0f19;
+    color: #e2e8f0;
+}
+
+/* Base App Background Gradient */
+.stApp {
+    background: radial-gradient(circle at top left, #111827 0%, #0b0f19 100%) !important;
+}
+
+/* Sidebar Styling */
+[data-testid="stSidebar"] {
+    background: rgba(17, 24, 39, 0.7) !important;
+    backdrop-filter: blur(12px);
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Sidebar Navigation Radio Buttons to Pills */
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] > label {
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 10px;
+    padding: 12px 18px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] > label:hover {
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    transform: translateX(4px);
+}
+
+/* Hide the actual radio circle entirely */
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] div[data-baseweb="radio"] {
+    display: none !important;
+}
+
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] > label > div:first-child {
+    display: none !important;
+}
+
+/* The text inside the radio button */
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] p {
+    font-size: 1.05rem;
+    font-weight: 500;
+    margin: 0;
+    color: #cbd5e1;
+}
+
+/* Checked state */
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] > label[data-baseweb="radio"]:has(input:checked), 
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] > label[data-testid="stWidgetLabel"]:has(input:checked) {
+    background: linear-gradient(135deg, rgba(59,130,246,0.8) 0%, rgba(37,99,235,0.9) 100%);
+    border: 1px solid rgba(96, 165, 250, 0.6);
+    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
+}
+
+[data-testid="stSidebar"] div.stRadio > div[role="radiogroup"] > label:has(input:checked) p {
+    color: #ffffff;
+    font-weight: 600;
+}
+
+/* Headings */
+h1, h2, h3, h4 {
+    color: #f8fafc !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.02em;
+}
+
+h1 {
+    background: -webkit-linear-gradient(45deg, #3b82f6, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    padding-bottom: 0.2rem;
+}
+
+/* Metric Cards & Generic Cards (Glassmorphism) */
+.metric-card, .signal-card, div.stDataFrame {
+    background: rgba(30, 41, 59, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 1.5rem;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(10px);
+    transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.metric-card:hover, .signal-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 30px rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.4);
+}
+
+/* Metric Card specific internals */
+.metric-label {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.metric-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #f8fafc;
+}
+
+/* Positive / Negative Variations */
+.val-up { color: #10b981 !important; text-shadow: 0 0 10px rgba(16, 185, 129, 0.3); }
+.val-down { color: #ef4444 !important; text-shadow: 0 0 10px rgba(239, 68, 68, 0.3); }
+.val-neu { color: #94a3b8 !important; }
+
+/* Section Titles */
+.section-title {
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 0.5rem;
+}
+
+/* Log Rows */
+.log-row {
+    background: rgba(15, 23, 42, 0.6);
+    border-left: 3px solid #3b82f6;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: #cbd5e1;
+    transition: background 0.2s;
+}
+.log-row:hover {
+    background: rgba(30, 41, 59, 0.8);
+}
+
+/* Buttons */
+.stButton > button {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.5rem 1.5rem !important;
+    font-weight: 500 !important;
+    transition: all 0.3s ease !important;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3) !important;
+}
+
+.stButton > button:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 16px rgba(37, 99, 235, 0.4) !important;
+    background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%) !important;
+}
+
+/* Expander headers */
+.streamlit-expanderHeader {
+    background: rgba(30, 41, 59, 0.5) !important;
+    border-radius: 8px;
+}
+
+/* Dataframe modifications to fit dark mode glass */
+[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* Active Positions Grid */
+.position-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.position-card {
+    padding: 1.2rem !important;
+}
+
+.pos-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.pos-symbol {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #f8fafc;
+}
+
+.badge-long {
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+}
+
+.badge-short {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.pos-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.pos-row-mb {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 15px;
+}
+
+.pos-label {
+    color: #94a3b8;
+    font-size: 0.9rem;
+}
+
+.pos-value {
+    color: #cbd5e1;
+    font-weight: 500;
+}
+
+.pos-footer {
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.pos-pnl-val {
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+.pos-pnl-pct {
+    font-size: 0.85rem;
+}

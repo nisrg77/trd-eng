@@ -1,0 +1,56 @@
+===============================================================================
+TEDENG — FORKED PIPELINE ARCHITECTURE (24/7 CRYPTO vs REGULATED US STOCK FUTURES)
+===============================================================================
+
+```mermaid
+graph TD
+    subgraph Market Data Ingestion Fork
+        A1[Alpaca REST API - Regulated CME US Stock Futures AAPL, SPY]
+        A2[Binance REST API - Continuous 24/7 Crypto Perpetuals BTC-USD, ETH-USD]
+    end
+
+    subgraph 1. Feature Engineering & Stationarity Fork [data_pipeline/pipeline.py]
+        B1[Session-Aware FracDiff: Pauses decay over >48h weekend gaps for US Futures]
+        B2[Continuous FracDiff: 24/7 continuous memory decay for Crypto]
+        B3[Single Exchange CME Order Book Imbalance for US Futures]
+        B4[Multi-Venue Aggregated Order Book Imbalance for Crypto]
+    end
+
+    subgraph 2. ML Ensemble & Regime Classification [brain/]
+        C1[Gaussian HMM US Futures Model: 1.5% Volatility Threshold]
+        C2[Gaussian HMM Crypto Model: 4.0% Volatility Threshold]
+        C3[Combinatorial Purged CV Validator - CPCV]
+        C4[Regime-Based Meta-Aggregator Signal Blend]
+    end
+
+    subgraph 3. Risk Guard Circuit Breakers [execution/risk.py]
+        D1[Kelly Criterion Optimal Position Sizing f* = p*b+1-1/b]
+        D2[US Futures Circuit Breaker: Strict 3% Daily / $300 Loss Limit]
+        D3[Crypto Circuit Breaker: 6% Daily Drawdown Limit]
+    end
+
+    subgraph 4. Order Execution Engine [execution/simulated_oms.py]
+        E1[10x Futures Margin Leverage Account]
+        E2[ATR Trailing Stop Loss Engine]
+        E3[Microstructure LOB Imbalance Filter rho > 0.3]
+    end
+
+    subgraph 5. Presentation & Streaming Layer [frontend/]
+        F1[FastAPI ASGI WebSocket Bridge - Port 8000]
+        F2[Next.js 14 App Router Dashboard - Port 3000]
+        F3[TradingView Candlestick Chart + Recharts Equity Curve + IST Logs]
+    end
+
+    A1 --> B1 --> B3
+    A2 --> B2 --> B4
+    B3 --> C1
+    B4 --> C2
+    C1 & C2 --> C4
+    C4 --> D1
+    D1 --> D2 & D3
+    D2 & D3 --> E1 --> E2 & E3
+    E3 --> F1 --> F2 --> F3
+```
+
+Architecture Image updated at: d:\New folder\TEDENG\architecture.png
+===============================================================================
