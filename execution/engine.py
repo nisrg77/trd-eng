@@ -28,6 +28,38 @@ import config
 # LOB imbalance filter           | per order proposal | execution/simulated_oms.py
 # VPOC TP snapping               | per fill / per bar | execution/simulated_oms.py
 
+def _log_rejection(
+    instrument: str,
+    asset_class: str,
+    gate: str,
+    reason: str,
+    final_action: str,
+    direction: float,
+    effective_conviction: float,
+    goal_state=None,
+) -> None:
+    """Fire-and-forget: write a gate rejection record to MongoDB gate_rejections."""
+    try:
+        from middleware.db_manager import mongo_db
+        from goals.goal_module import load_state
+        state = goal_state or load_state()
+        ac_key = "crypto" if asset_class == "crypto" else "stock"
+        bucket = state.crypto if ac_key == "crypto" else state.stock
+        mongo_db.save_gate_rejection({
+            "instrument": instrument,
+            "asset_class": asset_class,
+            "gate": gate,
+            "reason": reason,
+            "final_action": final_action,
+            "signal_direction": direction,
+            "effective_conviction": effective_conviction,
+            "daily_trades_used": bucket.trades_today,
+            "monthly_pnl_usd": bucket.realized_pnl_this_month_usd,
+        })
+    except Exception:
+        pass  # Never block the trade path
+
+
 class ExecutionEngine:
     def __init__(self):
         pass
@@ -129,12 +161,17 @@ class ExecutionEngine:
 
         try:
             from alpha_overlay.iff import get_flow_score
+            import config as _cfg
             obi_rho = float(signal.get("obi_rho", signal.get("features", {}).get("order_book_imbalance", 0.0)))
             flow_score = float(get_flow_score(instr, obi_rho))
-            veto_thresh = getattr(config, "IFF_VETO_THRESHOLD", 0.5)
-            if (direction > 0 and flow_score < -veto_thresh) or (direction < 0 and flow_score > veto_thresh):
-                iff_veto = True
-            scaled_signal = direction * (1.0 + 0.5 * flow_score)
+            # Must match iff.py: threshold 0.65, crypto exempt from hard veto
+            veto_thresh = getattr(_cfg, "IFF_VETO_THRESHOLD", 0.65)
+            is_crypto = instr in getattr(_cfg, "CRYPTO_INSTRUMENTS", [])
+            if not is_crypto:
+                if (direction > 0 and flow_score < -veto_thresh) or (direction < 0 and flow_score > veto_thresh):
+                    iff_veto = True
+            # Soft scale capped at ±30% (matches iff.py)
+            scaled_signal = direction * (1.0 + 0.3 * flow_score)
         except Exception:
             pass
 
@@ -161,6 +198,15 @@ class ExecutionEngine:
                 final_action=block_reason
             )
             decision_trace_buffer.record_trace(trace)
+            _log_rejection(
+                instrument=instr,
+                asset_class=asset_class,
+                gate="GOAL_GATE",
+                reason=decision.reason,
+                final_action=block_reason,
+                direction=direction,
+                effective_conviction=effective_conviction,
+            )
             return None
 
         if effective_conviction < getattr(config, "MIN_CONFIDENCE_THRESHOLD", 0.35):
@@ -185,6 +231,15 @@ class ExecutionEngine:
                 final_action="BLOCKED_LOW_CONVICTION"
             )
             decision_trace_buffer.record_trace(trace)
+            _log_rejection(
+                instrument=instr,
+                asset_class=asset_class,
+                gate="LOW_CONVICTION",
+                reason=f"effective_conviction {effective_conviction:.4f} < threshold {getattr(config, 'MIN_CONFIDENCE_THRESHOLD', 0.35)}",
+                final_action="BLOCKED_LOW_CONVICTION",
+                direction=direction,
+                effective_conviction=effective_conviction,
+            )
             return None
 
         allocation_pct = effective_conviction * profile["KELLY_FRACTION"]
@@ -239,6 +294,15 @@ class ExecutionEngine:
         decision_trace_buffer.record_trace(trace)
 
         if preempted:
+            _log_rejection(
+                instrument=instr,
+                asset_class=asset_class,
+                gate="MICRO_BUFFER",
+                reason=micro_reason,
+                final_action="BLOCKED_MICRO_BUFFER",
+                direction=direction,
+                effective_conviction=effective_conviction,
+            )
             return None
 
         order_id = "ord_" + uuid.uuid4().hex[:8]
