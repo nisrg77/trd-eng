@@ -16,6 +16,19 @@ frontend/node_modules/
 scratch/
 check_db.py
 check_*.py
+
+# Runtime state files — never commit (regenerated on startup)
 signals_store.json
 execution_store.json
 simulated_account.json
+decision_trace.jsonl
+screener_targets.json
+quota_state.json
+goal.txt
+*.png
+*.csv
+export_*.py
+dstree.*
+
+# Next.js build cache
+frontend/.next/
