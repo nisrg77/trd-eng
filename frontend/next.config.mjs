@@ -5,7 +5,7 @@ const nextConfig = {
     const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://13.53.173.97:8000';
     return [
       {
-        source: '/api-proxy/:path*',
+        source: '/api/:path*',
         destination: `${backendUrl.replace(/\/$/, '')}/api/:path*`,
       },
     ];
