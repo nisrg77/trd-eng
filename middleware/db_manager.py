@@ -183,6 +183,56 @@ class MongoDatabaseManager:
             log.error(f"[MongoDB] Error querying trade logs: {e}")
             return []
 
+    # ── Gate Rejection Log ────────────────────────────────────────────────────
+    def save_gate_rejection(self, rejection: Dict[str, Any]) -> bool:
+        """
+        Persists a structured gate rejection record to the `gate_rejections` collection.
+
+        Expected keys in `rejection`:
+          instrument       str   — ticker / pair
+          asset_class      str   — 'crypto' | 'stock'
+          gate             str   — gate layer name, e.g. 'GOAL_GATE', 'LOW_CONVICTION', ...
+          reason           str   — human-readable block reason from that gate
+          final_action     str   — mirrors DecisionTrace.final_action
+          signal_direction float — raw directional magnitude from the signal
+          effective_conviction float
+          daily_trades_used    int
+          monthly_pnl_usd      float
+        """
+        if not self.connected or self.db is None:
+            log.debug("[MongoDB] gate_rejection not persisted — no connection.")
+            return False
+        try:
+            doc = {
+                "rejection_id": f"rej_{int(time.time() * 1000)}",
+                "timestamp": time.time(),
+                "instrument": rejection.get("instrument", ""),
+                "asset_class": rejection.get("asset_class", ""),
+                "gate": rejection.get("gate", "UNKNOWN"),
+                "reason": rejection.get("reason", ""),
+                "final_action": rejection.get("final_action", ""),
+                "signal_direction": float(rejection.get("signal_direction", 0.0)),
+                "effective_conviction": float(rejection.get("effective_conviction", 0.0)),
+                "daily_trades_used": int(rejection.get("daily_trades_used", 0)),
+                "monthly_pnl_usd": float(rejection.get("monthly_pnl_usd", 0.0)),
+            }
+            self.db["gate_rejections"].insert_one(doc)
+            return True
+        except Exception as e:
+            log.error(f"[MongoDB] Error saving gate rejection: {e}")
+            return False
+
+    def get_gate_rejections(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Returns the most recent gate rejection records, newest first."""
+        if not self.connected or self.db is None:
+            return []
+        try:
+            cursor = self.db["gate_rejections"].find({}, {"_id": 0}).sort("timestamp", -1).limit(limit)
+            return list(cursor)
+        except Exception as e:
+            log.error(f"[MongoDB] Error querying gate rejections: {e}")
+            return []
+
     # ── Screener Rankings Cache ───────────────────────────────────────────────
     def save_screener_cache(self, candidates: List[Dict[str, Any]]) -> bool:
         if not self.connected or self.db is None:

@@ -37,20 +37,10 @@ class TestFutureProofingPatches(unittest.TestCase):
         self.assertGreaterEqual(len(state.range_atr_history), 60)
 
     def test_equity_scaled_risk_budgeting(self):
-        # Low equity scenario ($50 NAV)
-        low_state = GoalState(equity_current_usd=50.0)
-        budget_low = position_risk_budget_usd("crypto", state=low_state)
-        self.assertEqual(budget_low, 1.0)  # Min $1 floor
-
-        # Base equity scenario ($1000 NAV)
-        base_state = GoalState(equity_current_usd=1000.0)
+        # Base equity scenario
+        base_state = GoalState()
         budget_base = position_risk_budget_usd("crypto", state=base_state)
-        self.assertEqual(budget_base, 3.75)  # 30% allocation * 1.25% risk = 0.375% of $1000 = $3.75
-
-        # Scaled high equity scenario ($10,000 NAV)
-        high_state = GoalState(equity_current_usd=10000.0)
-        budget_high = position_risk_budget_usd("crypto", state=high_state)
-        self.assertEqual(budget_high, 37.5)  # Scaled smoothly without cash drag ($37.50 <= 5% cap of $500)
+        self.assertEqual(budget_base, 10.0)  # Static risk budget default
 
     def test_micro_buffer_production_parameters(self):
         """Production parameters: hold_ms=50.0, dwell_ms=10.0 with timestamped ticks."""

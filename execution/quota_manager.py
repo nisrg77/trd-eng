@@ -21,18 +21,16 @@ class QuotaManager:
     def can_trade(self, asset_class: str) -> bool:
         """Returns True if the pipeline is allowed to trade based on GoalModule."""
         state = goal_module.load_state()
-        ac = asset_class.lower()
-        if ac in ["crypto"]:
-            return state["crypto"]["completed"] < self.target_crypto
-        elif ac in ["futures", "stock", "stocks"]:
-            return state["stocks"]["completed"] < self.target_futures
-        return False
+        ac = "crypto" if asset_class.lower() == "crypto" else "stock"
+        bucket = state.bucket(ac)
+        target = self.target_crypto if ac == "crypto" else self.target_futures
+        return bucket.trades_today < target
 
     def is_baseline_complete(self) -> bool:
-        """Returns True if monthly trade ceilings are reached."""
+        """Returns True if daily trade ceilings are reached."""
         state = goal_module.load_state()
-        return (state["crypto"]["completed"] >= self.target_crypto and 
-                state["stocks"]["completed"] >= self.target_futures)
+        return (state.crypto.trades_today >= self.target_crypto and 
+                state.stock.trades_today >= self.target_futures)
 
     def log_closed_trade(self, asset_class: str, pnl: float):
         """Logs a closed trade via GoalModule."""

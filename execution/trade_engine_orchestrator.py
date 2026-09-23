@@ -29,6 +29,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from brain.hmm_regime import GaussianHMMRegimeDetector
 from execution.simulated_oms import SimulatedFuturesOMS
+from execution.engine import ExecutionEngine
+from execution.risk import RiskGuard
 from execution.quota_manager import quota_manager
 from data_pipeline.stock_screener import stock_screener
 from middleware.telemetry_db import telemetry
@@ -44,6 +46,8 @@ class TradeEngineOrchestrator:
         
         self.hmm = GaussianHMMRegimeDetector()
         self.oms = SimulatedFuturesOMS()
+        self.execution_engine = ExecutionEngine()
+        self.risk_guard = RiskGuard()
         
         # Cache for screener targets
         self.target_long = None
@@ -168,23 +172,75 @@ class TradeEngineOrchestrator:
                     detail = f"US Futures Short Target ({instrument}) + Bear + OBI < -0.3"
 
         if action:
-            order = {
+            log.info(f"[Orchestrator] Signal fired: {action} on {instrument} — {detail}")
+
+            # ── Route through the full gate chain ──────────────────────────────
+            # Build a standard signal dict that ExecutionEngine expects
+            signal = {
                 "instrument": instrument,
-                "action": action,
-                "portfolio_allocation_pct": 0.10,
-                "atr": atr_proxy,
-                "risk_state": "APPROVED"
+                "confidence_score": abs(obi_rho),           # OBI strength as confidence proxy
+                "direction_magnitude": 1.0 if action == "BUY" else -1.0,
+                "obi_rho": obi_rho,
+                "features": features,
             }
-            
-            log.info(f"[Orchestrator] Attempting {action} on {instrument}: {detail}")
-            result = self.oms.submit_order(order, current_price, obi_rho)
-            
+
+            # Fetch current instrument positions for the engine
+            account_state = self.oms.get_account_state()
+            instrument_data = account_state.get("positions", {})
+
+            # Gate layers 1–4: Goal, Conviction, IFF, Micro-buffer
+            proposed_order = self.execution_engine.size_order(signal, instrument_data)
+
+            if proposed_order is None:
+                log.info(f"[Orchestrator] {instrument} blocked before Risk Guard (engine gates).")
+                return
+
+            # Gate layer 5: Risk Guard — circuit breaker, session, exposure, concentration
+            self.risk_guard.update_state(
+                current_exposure=account_state.get("exposure_pct", 0.0),
+                instrument_exposures=instrument_data,
+                current_equity=account_state.get("equity", 1000.0),
+            )
+            evaluated = self.risk_guard.check_order(
+                proposed_order, current_equity=account_state.get("equity", 1000.0)
+            )
+
+            if evaluated.get("risk_state") != "APPROVED":
+                rejection_detail = evaluated.get("detail", evaluated.get("failed_check", "risk_guard"))
+                log.warning(
+                    f"[Orchestrator] {instrument} REJECTED by Risk Guard: "
+                    f"{evaluated.get('failed_check')} — {rejection_detail}"
+                )
+                # Log Risk Guard rejection to MongoDB gate_rejections
+                try:
+                    from middleware.db_manager import mongo_db
+                    from goals.goal_module import load_state
+                    state = load_state()
+                    ac_key = "crypto" if is_crypto else "stock"
+                    bucket = state.crypto if ac_key == "crypto" else state.stock
+                    mongo_db.save_gate_rejection({
+                        "instrument": instrument,
+                        "asset_class": asset_class,
+                        "gate": "RISK_GUARD",
+                        "reason": rejection_detail,
+                        "final_action": f"REJECTED_{evaluated.get('failed_check', 'RISK_GUARD').upper()}",
+                        "signal_direction": signal["direction_magnitude"],
+                        "effective_conviction": signal["confidence_score"],
+                        "daily_trades_used": bucket.trades_today,
+                        "monthly_pnl_usd": bucket.realized_pnl_this_month_usd,
+                    })
+                except Exception:
+                    pass
+                return
+
+            # ── All gates passed — submit to OMS ──────────────────────────────
+            evaluated["atr"] = atr_proxy
+            result = self.oms.submit_order(evaluated, current_price, obi_rho)
+
             if result.get("oms_state") == "SUBMITTED":
                 qty = result.get("qty", 1.0)
                 telemetry.log_execution(instrument, action, qty, current_price, slippage=0.01, latency_ms=15.0, hmm_state=regime_state)
                 WebhookAlerts.alert_trade_fill(instrument, action, qty, current_price)
-                
-                # Note: We now properly track actual closed trades via update_prices exits above. 
 
     def run(self):
         log.info("[Orchestrator] Trade Engine Orchestrator Started.")
