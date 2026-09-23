@@ -30,7 +30,7 @@ STATE_PATH = os.path.join(BASE_DIR, "quota_state.json")
 MAX_MONTHLY_LOSS_USD = -1000.0
 DAILY_TRADE_LIMITS = {"crypto": 20, "stock": 80}
 
-# Fallback values for the OMS (replace with your preferred flat sizes)
+# Fallback floor leverage (only used if conviction data unavailable)
 STATIC_LEVERAGE = 1.0
 STATIC_RISK_BUDGET = 10.0
 
@@ -179,8 +179,11 @@ def evaluate_trade(
     if dead_day_result.get("effective_conviction", 0.0) <= 0.0:
         return TradeDecision(False, "Zero effective conviction — no qualifying signal")
 
-    # 4. Approved
-    return TradeDecision(True, "OK")
+    # 4. Approved — compute dynamic leverage from conviction
+    effective_conviction = float(dead_day_result.get("effective_conviction", 0.5))
+    range_atr_ratio = float(dead_day_result.get("range_atr_ratio", 1.0))
+    dyn_leverage = select_leverage(ac, effective_conviction, range_atr_ratio)
+    return TradeDecision(True, "OK", leverage=dyn_leverage)
 
 
 def record_trade_result(
@@ -214,7 +217,30 @@ def select_leverage(
     effective_conviction: float = 1.0,
     range_atr_ratio: float = 1.0,
 ) -> float:
-    return STATIC_LEVERAGE
+    """
+    Dynamic leverage curve decided by the engine based on conviction.
+    - Crypto: 1x – 5x  (higher leverage, 24/7 market)
+    - Stocks: 1x – 3x  (lower leverage, RTH only)
+    Scaled linearly by effective_conviction [0, 1].
+    ATR ratio > 1.5 (wide range / high vol day) reduces leverage by 30%.
+    """
+    ac = asset_class.lower()
+    conv = max(0.0, min(1.0, float(effective_conviction)))
+
+    if ac == "crypto":
+        max_lev = 5.0
+        min_lev = 1.0
+    else:  # stock / futures
+        max_lev = 3.0
+        min_lev = 1.0
+
+    lev = min_lev + (max_lev - min_lev) * conv
+
+    # Reduce leverage on wide ATR range days (choppy market)
+    if float(range_atr_ratio) > 1.5:
+        lev *= 0.7
+
+    return round(max(min_lev, min(max_lev, lev)), 2)
 
 
 def position_risk_budget_usd(

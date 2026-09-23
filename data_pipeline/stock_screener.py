@@ -26,6 +26,15 @@ import config
 
 log = logging.getLogger(__name__)
 
+# ── TradingView Screener (for real-time prices) ────────────────────────────────
+try:
+    from tradingview_screener import Scanner
+    _TV_AVAILABLE = True
+except ImportError:
+    _TV_AVAILABLE = False
+    log.warning("[Screener] tradingview-screener not installed. pip install tradingview-screener")
+
+
 CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screener_cache.json")
 
 CME_SSF_55_PROXIES = [
@@ -186,6 +195,47 @@ class StockScreener:
 
         return candidates
 
+    def _enrich_with_tv_prices(self, candidates: list[dict]) -> list[dict]:
+        """
+        Fetches real-time price, % change, and volume from TradingView.
+        Replaces inaccurate IEX prices with accurate TV data.
+        """
+        if not _TV_AVAILABLE or not candidates:
+            return candidates
+        try:
+            symbols = [c["symbol"] for c in candidates]
+            # Build TV screener query for our symbols
+            df, _ = (
+                Scanner.us_stocks()
+                .select("name", "close", "change", "change_abs", "volume", "relative_volume")
+                .where(
+                    Scanner.col("name").isin(symbols)
+                )
+                .get_scanner_data()
+            )
+            if df is None or df.empty:
+                return candidates
+            # Build price lookup by symbol
+            tv_map = {}
+            for _, row in df.iterrows():
+                sym = row.get("name", "")
+                if sym:
+                    tv_map[sym] = {
+                        "price": round(float(row.get("close", 0)), 2),
+                        "change_pct": round(float(row.get("change", 0)), 2),
+                        "change_abs": round(float(row.get("change_abs", 0)), 2),
+                        "rvol": round(float(row.get("relative_volume", 1.0)), 2),
+                    }
+            # Enrich candidates
+            for c in candidates:
+                sym = c["symbol"]
+                if sym in tv_map:
+                    c.update(tv_map[sym])
+            log.info("[Screener] TV prices enriched for %d symbols", len(tv_map))
+        except Exception as e:
+            log.warning("[Screener] TV price enrichment failed: %s", e)
+        return candidates
+
     def get_top_candidates(self, count: int = 15, cache_ttl_days: int = 7, force_refresh: bool = False) -> list[dict]:
         """
         Retrieves the top 10-15 ranked stocks.
@@ -213,6 +263,7 @@ class StockScreener:
         log.info("[Screener Cache] 7-day cache invalid or expired. Computing fresh rankings...")
         try:
             candidates = self._execute_full_analysis(count=count)
+            candidates = self._enrich_with_tv_prices(candidates)
         except Exception as e:
             log.error(f"[Screener] Failed to run screener analysis: {e}. Using fallback candidates.")
             candidates = FALLBACK_CANDIDATES[:count]

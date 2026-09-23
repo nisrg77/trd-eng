@@ -18,4 +18,5 @@ pymongo>=4.6.0
 requests>=2.31.0
 python-dotenv>=1.0.0
 alpaca-py>=0.20.0
+tradingview-screener>=0.16.0
 
