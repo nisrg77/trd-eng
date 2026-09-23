@@ -73,13 +73,7 @@ export const useTradingStore = create<TradingStoreState>((set) => ({
       source: 'ENGINE',
     },
   ],
-  equityCurve: [
-    { time: '10:00', equity: 1000, pnl: 0 },
-    { time: '10:05', equity: 1002, pnl: 2 },
-    { time: '10:10', equity: 998, pnl: -2 },
-    { time: '10:15', equity: 1005, pnl: 5 },
-    { time: '10:20', equity: 1012, pnl: 12 },
-  ],
+  equityCurve: [],
   quotaState: {
     crypto: { completed: 0, wins: 0, losses: 0, win_pnl: 0.0, loss_pnl: 0.0 },
     futures: { completed: 0, wins: 0, losses: 0, win_pnl: 0.0, loss_pnl: 0.0 }

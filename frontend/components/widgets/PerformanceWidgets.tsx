@@ -13,7 +13,7 @@ export const PerformanceWidgets: React.FC = () => {
 
   const totalFilled = executions.filter((e) => e.oms_state === 'FILLED').length;
   const winCount = executions.filter((e) => e.oms_state === 'FILLED' && (e.notional_value || 0) > 0).length;
-  const winRatePct = totalFilled > 0 ? ((winCount / totalFilled) * 100).toFixed(1) : '68.4';
+  const winRatePct = totalFilled > 0 ? ((winCount / totalFilled) * 100).toFixed(1) : '0.0';
 
   const pnlIsPositive = (account.realized_pl || 0) >= 0;
 
@@ -56,7 +56,7 @@ export const PerformanceWidgets: React.FC = () => {
         <div>
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Drawdown</span>
           <div className="text-xl font-bold text-rose-400 font-mono mt-0.5">
-            -{(account.active_drawdown_pct || 0.42).toFixed(2)}%
+            -{(account.active_drawdown_pct || 0.0).toFixed(2)}%
           </div>
           <div className="text-xs text-slate-400 font-mono mt-1">
             Max Limit: 15.0%
