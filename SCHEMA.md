@@ -46,12 +46,15 @@ Emitted whenever a position is opened, updated on mark-price tick, partially clo
 | :--- | :--- | :--- |
 | `trade_id` | `string` | Unique UUID for the position lifecycle. |
 | `symbol` | `string` | Symbol identifier (e.g. `"BTC-USD"`, `"AAPL"`). |
+| `instrument` | `string` | Canonical instrument identifier (synonym for `symbol`). |
 | `side` | `"long"` \| `"short"` | Position direction (`"long"` for positive qty, `"short"` for negative qty). |
 | `size` | `number` | Absolute quantity of contracts / shares (`> 0`). |
+| `qty` | `number` | Signed position quantity (`> 0` for long, `< 0` for short, micro precision up to 6 decimals for crypto). |
 | `leverage` | `number` | Applied leverage factor (e.g. `10.0`). |
 | `entry_price` | `number` | Weighted average fill price on entry. |
 | `exit_price` | `number` \| `null` | Fill price on exit (`null` while position is `"open"`). |
 | `mark_price` | `number` | Current mark-to-market price. |
+| `current_price` | `number` | Real-time mark price (synonym for `mark_price`). |
 | `unrealized_pnl` | `number` | Pure mark-to-market P&L: `(mark_price - entry_price) * size * (1 if side == "long" else -1)`. |
 | `realized_pnl` | `number` \| `null` | Booked P&L upon partial or total exit (`null` if fully open without prior exit). |
 | `status` | `"open"` \| `"closed"` \| `"liquidated"` | Current trade lifecycle state. |
@@ -131,3 +134,9 @@ Returns an array of all current active positions conforming to `position_update.
 
 ### `GET /api/trade-logs`
 Returns recent structured execution logs conforming to `execution_log.data`.
+
+### `GET /api/klines?symbol={symbol}&limit={limit}`
+Returns an array of historical OHLCV candlestick bars for TradingView chart rendering.
+
+### `GET /api/screener/top-stocks`
+Returns the ranked CME SSF top stock candidates sourced via the TradingView Screener batch scan.

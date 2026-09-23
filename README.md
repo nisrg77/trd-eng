@@ -32,23 +32,42 @@ Raw Feed (yfinance + Alpaca REST + Binance aggTrade WS)
 | **COT** | `alpha_overlay/cot_bias.py` | CFTC Disaggregated COT macro bias tracker (CME futures proxy for crypto). |
 | **GOAL & RISK** | `goals/goal_module.py` | Monthly Ceilings (20 Crypto / 80 Stocks), Multi-Horizon Circuit Breakers (4% daily loss, 18% monthly drawdown), Dynamic Leverage ($1\times - 5\times$ Crypto / $1\times - 10\times$ Stocks). |
 | **SESSION** | `execution/market_session.py` | RTH session gating (Mon–Fri 09:30–16:00 ET for US Equities / 24-7 for Crypto). |
+| **SCREENER** | `data_pipeline/stock_screener.py` | TradingView Screener v3 Batch Scanner for 55 CME SSF equities (<1s refresh). |
+| **DB** | `middleware/db_manager.py` | MongoDB Atlas persistence manager for real-time `account`, `positions`, `quota`, and `trades` synchronization. |
 | **EE** | `execution/engine.py` | 9-Layer Execution Cadence mapping signals through state, dead-day, goals, and risk modules. |
-| **OMS** | `execution/simulated_oms.py` | Risk-budget USD sizing, ATR trailing stop, and VPOC/VAH/VAL take-profit snapping. |
+| **OMS** | `execution/simulated_oms.py` | Risk-budget USD sizing, 6-decimal micro-crypto precision, ATR trailing stop, and VPOC/VAH/VAL take-profit snapping. |
 | **AUDIT** | `core/decision_trace.py` | `DecisionTrace` diagnostic logging to `decision_trace.jsonl` for full auditability. |
-| **WS** | `services/ws_server.py` | FastAPI WebSocket server streaming `TICK`, `GOAL_UPDATE`, `QUOTA_UPDATE`, `SCREENER_UPDATE`, `MICROSTRUCTURE`, and `/api/decision-traces`. |
+| **WS** | `services/ws_server.py` | FastAPI WebSocket server streaming `TICK`, `GOAL_UPDATE`, `QUOTA_UPDATE`, `SCREENER_UPDATE`, `MICROSTRUCTURE`, plus REST endpoints `/api/klines`, `/api/positions`, `/api/decision-traces`. |
 | **UI** | `frontend/` | Stitch MCP Next.js Trading Terminal featuring Crypto Perpetuals (`/crypto`), US Futures (`/us-futures`), and Trade Logs (`/trade-logs`). |
 
 ---
 
 ## Quick Start
 
-### 1. Install dependencies
+### Option A: Docker Deployment (Recommended for EC2 / Production)
 ```bash
+# Build and run all services (WebSocket, backend engine, frontend, Redis)
+docker compose up -d --build
+
+# View container logs
+docker compose logs -f --tail=30
+```
+
+### Option B: Local / Manual Execution
+
+#### 1. Install dependencies
+```bash
+python -m venv venv
+# On Windows:
+.\venv\Scripts\activate
+# On Linux / macOS:
+source venv/bin/activate
+
 pip install -r requirements.txt
 cd frontend && npm install && cd ..
 ```
 
-### 2. Run background services
+#### 2. Run background services
 ```bash
 # Terminal 1 — FastAPI WebSocket Server
 python services/ws_server.py
@@ -61,9 +80,9 @@ cd frontend && npm run dev
 # Open http://localhost:3000 in your browser
 ```
 
-### 3. Run test suite
+#### 3. Run complete test suite (110 tests)
 ```bash
-python -m unittest discover -s tests -p "test_*.py"
+pytest tests/ -v
 ```
 
 ---

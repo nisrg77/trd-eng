@@ -54,6 +54,12 @@ graph TD
         F3["Crypto Perpetuals View /crypto: 24-7 Funding Heatmap + LOB Depth + VPOC"]
         F4["US Futures Hub /us-futures: RTH Session Banner + 7-Day Screener Candidate Pool"]
         F5["Trade Logs Audit /trade-logs: Ceilings Progress + Circuit Breakers + Audit Table"]
+        F6["TradingView Lightweight Chart: Real-time Ticks & /api/klines Hydration"]
+    end
+
+    subgraph 8. Persistence & Screener Engine [middleware/ & data_pipeline/]
+        I1["MongoDB Atlas db_manager.py: Bidirectional Account & Positions Sync"]
+        I2["TradingView Screener stock_screener.py: 55 CME SSF Batch Scanner"]
     end
 
     A1 --> B1 --> B3
@@ -72,6 +78,10 @@ graph TD
     E1 --> E2 & E3 & E4
     E0 -- DecisionTrace Audit --> H2
     E4 --> F1 --> F2
+    E0 -- State Updates --> I1
+    I1 -- Real-Time Positions --> F1
+    I2 -- 55 SSF Rankings --> F1
     F2 --> F3 & F4 & F5
+    F3 & F4 --> F6
     G1 & G3 & D3 -- Telemetry Stream --> F1
 ```
