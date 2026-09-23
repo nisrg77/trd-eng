@@ -24,12 +24,24 @@ function normalizeExecution(ex: any) {
 import { getApiBaseUrl } from '@/lib/utils';
 
 export const useTradingWebSocket = () => {
-  // Dynamically get protocol (wss if https, ws if http) and host
-  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-  const wsProtocol = isHttps ? 'wss' : 'ws';
-  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const defaultUrl = `${wsProtocol}://${host}:8000/ws/trading`;
-  const url = process.env.NEXT_PUBLIC_WS_URL || defaultUrl;
+  const getWsUrl = () => {
+    if (process.env.NEXT_PUBLIC_WS_URL) {
+      return process.env.NEXT_PUBLIC_WS_URL;
+    }
+    if (typeof window !== 'undefined') {
+      const isHttps = window.location.protocol === 'https:';
+      const wsProtocol = isHttps ? 'wss' : 'ws';
+      const host = window.location.hostname;
+      if (host.includes('vercel.app')) {
+        const awsIp = process.env.NEXT_PUBLIC_BACKEND_IP || '';
+        if (awsIp) return `${wsProtocol}://${awsIp}:8000/ws/trading`;
+      }
+      return `${wsProtocol}://${host}:8000/ws/trading`;
+    }
+    return 'ws://localhost:8000/ws/trading';
+  };
+
+  const url = getWsUrl();
   const wsRef = useRef<WebSocket | null>(null);
   const {
     selectedSymbol,

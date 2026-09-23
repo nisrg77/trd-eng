@@ -27,8 +27,16 @@ export function formatCurrency(value: number): string {
   }).format(value);
 }export function getApiBaseUrl(): string {
   if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
   }
-  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  return `http://${host}:8000`;
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    // If deployed on Vercel and NEXT_PUBLIC_API_URL is not set, check for NEXT_PUBLIC_BACKEND_IP
+    if (host.includes('vercel.app')) {
+      const awsIp = process.env.NEXT_PUBLIC_BACKEND_IP || '';
+      if (awsIp) return `http://${awsIp}:8000`;
+    }
+    return `http://${host}:8000`;
+  }
+  return 'http://localhost:8000';
 }
