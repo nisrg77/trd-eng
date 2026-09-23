@@ -61,7 +61,7 @@ export interface OrderExecution {
   risk_state: 'APPROVED' | 'REJECTED';
   checks_passed?: string[];
   failed_check?: string;
-  oms_state: 'SUBMITTED' | 'FILLED' | 'FAILED';
+  oms_state: 'SUBMITTED' | 'FILLED' | 'FAILED' | 'SKIPPED_BY_RISK';
   oms_detail?: string;
   notional_value?: number;
 }

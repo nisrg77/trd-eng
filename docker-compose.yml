@@ -1,6 +1,17 @@
 version: '3.8'
 
-services:
+  # Next.js Frontend Dashboard (Port 3000)
+  frontend:
+    build: ./frontend
+    container_name: trdeng-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+    depends_on:
+      - ws-server
+
   # The FastAPI WebSocket Server (Port 8000)
   ws-server:
     build: .
