@@ -26,17 +26,17 @@ export function formatCurrency(value: number): string {
     maximumFractionDigits: 2,
   }).format(value);
 }export function getApiBaseUrl(): string {
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
-  }
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
-    // If deployed on Vercel and NEXT_PUBLIC_API_URL is not set, check for NEXT_PUBLIC_BACKEND_IP
-    if (host.includes('vercel.app')) {
-      const awsIp = process.env.NEXT_PUBLIC_BACKEND_IP || '';
-      if (awsIp) return `http://${awsIp}:8000`;
+    const isHttps = window.location.protocol === 'https:';
+    // When running on Vercel over HTTPS, use Next.js server-side /api-proxy rewrite to bypass browser Mixed Content blocks
+    if (isHttps && host.includes('vercel.app')) {
+      return '/api-proxy';
+    }
+    if (process.env.NEXT_PUBLIC_API_URL) {
+      return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '');
     }
     return `http://${host}:8000`;
   }
-  return 'http://localhost:8000';
+  return process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '') : 'http://localhost:8000';
 }
