@@ -21,10 +21,14 @@ function normalizeExecution(ex: any) {
   };
 }
 
+import { getApiBaseUrl } from '@/lib/utils';
+
 export const useTradingWebSocket = () => {
-  // Dynamically get the host or use Vercel environment variable
+  // Dynamically get protocol (wss if https, ws if http) and host
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+  const wsProtocol = isHttps ? 'wss' : 'ws';
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const defaultUrl = `ws://${host}:8000/ws/trading`;
+  const defaultUrl = `${wsProtocol}://${host}:8000/ws/trading`;
   const url = process.env.NEXT_PUBLIC_WS_URL || defaultUrl;
   const wsRef = useRef<WebSocket | null>(null);
   const {
@@ -41,7 +45,31 @@ export const useTradingWebSocket = () => {
 
   useEffect(() => {
     let reconnectTimeout: NodeJS.Timeout;
+    let pollInterval: NodeJS.Timeout;
     let isMounted = true;
+
+    // HTTP Polling fallback if WebSocket is disconnected
+    const pollFallbackData = async () => {
+      try {
+        const baseUrl = getApiBaseUrl();
+        const [posRes, healthRes] = await Promise.all([
+          fetch(`${baseUrl}/api/positions`).catch(() => null),
+          fetch(`${baseUrl}/api/engine-health`).catch(() => null),
+        ]);
+
+        if (posRes && posRes.ok) {
+          const posData = await posRes.json();
+          if (posData && posData.positions) {
+            updateAccount({ positions: posData.positions });
+          }
+        }
+        if (healthRes && healthRes.ok) {
+          setConnectionStatus('CONNECTED');
+        }
+      } catch (e) {
+        // Silent fallback catch
+      }
+    };
 
     const connect = () => {
       try {
@@ -52,6 +80,7 @@ export const useTradingWebSocket = () => {
         ws.onopen = () => {
           if (!isMounted) return;
           setConnectionStatus('CONNECTED');
+          if (pollInterval) clearInterval(pollInterval);
           addLog({
             id: `ws_open_${Date.now()}`,
             timestamp: Date.now() / 1000,
@@ -110,17 +139,28 @@ export const useTradingWebSocket = () => {
         };
 
         ws.onerror = () => {
-          if (isMounted) setConnectionStatus('DISCONNECTED');
+          if (isMounted) {
+            setConnectionStatus('DISCONNECTED');
+            pollFallbackData();
+          }
         };
 
         ws.onclose = () => {
           if (!isMounted) return;
           setConnectionStatus('DISCONNECTED');
+          pollFallbackData();
+          if (!pollInterval) {
+            pollInterval = setInterval(pollFallbackData, 3000);
+          }
           reconnectTimeout = setTimeout(connect, 3000);
         };
       } catch (e) {
         if (isMounted) {
           setConnectionStatus('DISCONNECTED');
+          pollFallbackData();
+          if (!pollInterval) {
+            pollInterval = setInterval(pollFallbackData, 3000);
+          }
           reconnectTimeout = setTimeout(connect, 3000);
         }
       }
@@ -131,6 +171,7 @@ export const useTradingWebSocket = () => {
     return () => {
       isMounted = false;
       clearTimeout(reconnectTimeout);
+      if (pollInterval) clearInterval(pollInterval);
       if (wsRef.current) wsRef.current.close();
     };
   }, [selectedSymbol, url]);
