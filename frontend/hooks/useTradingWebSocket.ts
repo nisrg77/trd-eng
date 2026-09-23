@@ -21,7 +21,10 @@ function normalizeExecution(ex: any) {
   };
 }
 
-export const useTradingWebSocket = (url: string = 'ws://localhost:8000/ws/trading') => {
+export const useTradingWebSocket = () => {
+  // Dynamically get the host so it works when deployed on AWS (not just localhost)
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  const url = `ws://${host}:8000/ws/trading`;
   const wsRef = useRef<WebSocket | null>(null);
   const {
     selectedSymbol,
