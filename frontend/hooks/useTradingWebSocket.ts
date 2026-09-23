@@ -86,6 +86,19 @@ export const useTradingWebSocket = () => {
     const connect = () => {
       try {
         setConnectionStatus('RECONNECTING');
+        // Instantly fetch initial HTTP fallback data
+        pollFallbackData();
+
+        // If on HTTPS and no wss endpoint, browsers block ws:// with Mixed Content error.
+        const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+        if (isHttps && url.startsWith('ws:')) {
+          // Fall back gracefully to HTTPS HTTP polling without raising browser console blocks
+          if (!pollInterval) {
+            pollInterval = setInterval(pollFallbackData, 2000);
+          }
+          return;
+        }
+
         const ws = new WebSocket(`${url}?symbol=${selectedSymbol}`);
         wsRef.current = ws;
 
