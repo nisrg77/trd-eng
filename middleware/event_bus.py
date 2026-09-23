@@ -57,17 +57,24 @@ class EventBus:
             mult = 1.0 if clean_side == "long" else -1.0
             unrealized_pnl = round((mark_price - entry_price) * size * mult, 2)
 
+        rounded_size = round(abs(size), 6)
         data = {
             "trade_id": trade_id,
             "symbol": symbol,
+            "instrument": symbol,
             "side": clean_side,
-            "size": round(abs(size), 4),
+            "size": rounded_size,
+            "qty": rounded_size if clean_side == "long" else -rounded_size,
+            "quantity": rounded_size,
             "leverage": round(float(leverage), 2),
             "entry_price": round(float(entry_price), 4),
             "exit_price": round(float(exit_price), 4) if exit_price is not None else None,
             "mark_price": round(float(mark_price), 4),
+            "current_price": round(float(mark_price), 4),
             "unrealized_pnl": round(float(unrealized_pnl), 2) if unrealized_pnl is not None else 0.0,
+            "unrealized_pl": round(float(unrealized_pnl), 2) if unrealized_pnl is not None else 0.0,
             "realized_pnl": round(float(realized_pnl), 2) if realized_pnl is not None else None,
+            "realized_pl": round(float(realized_pnl), 2) if realized_pnl is not None else None,
             "status": clean_status,
             "opened_at": opened_at,
             "closed_at": closed_at if clean_status != "open" else None

@@ -1,1 +1,128 @@
-{}
+{
+  "last_updated": 1790194600.9491644,
+  "expires_at": 1790799400.9491644,
+  "ttl_days": 7,
+  "universe_size": 55,
+  "top_candidates": [
+    {
+      "rank": 1,
+      "symbol": "MCD",
+      "price": 238.32,
+      "change_pct": -4.81,
+      "change_abs": -12.03,
+      "volume": 16322866,
+      "rvol": 2.97,
+      "momentum": -0.0481,
+      "bias": "SELL",
+      "action": "SHORT"
+    },
+    {
+      "rank": 2,
+      "symbol": "PM",
+      "price": 190.84,
+      "change_pct": 0.32,
+      "change_abs": 0.61,
+      "volume": 6622019,
+      "rvol": 1.37,
+      "momentum": 0.0032,
+      "bias": "NEUTRAL",
+      "action": "HOLD"
+    },
+    {
+      "rank": 3,
+      "symbol": "GOOGL",
+      "price": 337.83,
+      "change_pct": -3.8,
+      "change_abs": -13.33,
+      "volume": 34957767,
+      "rvol": 1.23,
+      "momentum": -0.038,
+      "bias": "SELL",
+      "action": "SHORT"
+    },
+    {
+      "rank": 4,
+      "symbol": "AMZN",
+      "price": 249.27,
+      "change_pct": -2.24,
+      "change_abs": -5.71,
+      "volume": 43174560,
+      "rvol": 1.21,
+      "momentum": -0.0224,
+      "bias": "SELL",
+      "action": "SHORT"
+    },
+    {
+      "rank": 5,
+      "symbol": "BMY",
+      "price": 61.15,
+      "change_pct": -1.77,
+      "change_abs": -1.1,
+      "volume": 14267839,
+      "rvol": 1.21,
+      "momentum": -0.0177,
+      "bias": "SELL",
+      "action": "SHORT"
+    },
+    {
+      "rank": 6,
+      "symbol": "META",
+      "price": 744.1,
+      "change_pct": 1.02,
+      "change_abs": 7.5,
+      "volume": 29972541,
+      "rvol": 1.2,
+      "momentum": 0.0102,
+      "bias": "BUY",
+      "action": "LONG"
+    },
+    {
+      "rank": 7,
+      "symbol": "MDT",
+      "price": 89.3,
+      "change_pct": -1.62,
+      "change_abs": -1.47,
+      "volume": 10492633,
+      "rvol": 1.13,
+      "momentum": -0.0162,
+      "bias": "SELL",
+      "action": "SHORT"
+    },
+    {
+      "rank": 8,
+      "symbol": "ABT",
+      "price": 103.5,
+      "change_pct": -0.18,
+      "change_abs": -0.19,
+      "volume": 10368547,
+      "rvol": 1.13,
+      "momentum": -0.0018,
+      "bias": "NEUTRAL",
+      "action": "HOLD"
+    },
+    {
+      "rank": 9,
+      "symbol": "NEE",
+      "price": 77.02,
+      "change_pct": -2.83,
+      "change_abs": -2.24,
+      "volume": 12551289,
+      "rvol": 1.1,
+      "momentum": -0.0283,
+      "bias": "SELL",
+      "action": "SHORT"
+    },
+    {
+      "rank": 10,
+      "symbol": "MA",
+      "price": 559.92,
+      "change_pct": 0.72,
+      "change_abs": 4.03,
+      "volume": 2858343,
+      "rvol": 1.07,
+      "momentum": 0.0072,
+      "bias": "BUY",
+      "action": "LONG"
+    }
+  ]
+}

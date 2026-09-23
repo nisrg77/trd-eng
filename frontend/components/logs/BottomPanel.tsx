@@ -103,12 +103,16 @@ export const BottomPanel: React.FC = () => {
                 </tr>
               ) : (
                 positionsList.map((pos) => {
-                  const isProfitable = pos.unrealized_pl >= 0;
+                  const isProfitable = (pos.unrealized_pl ?? 0) >= 0;
+                  const rawQty = pos.qty ?? pos.size ?? 0;
+                  const isLong = String(pos.side || '').toLowerCase() === 'long' || rawQty >= 0;
+                  const absQty = Math.abs(rawQty);
+                  const qtyStr = absQty < 0.01 ? absQty.toFixed(6) : absQty.toFixed(4);
                   return (
                     <tr key={pos.symbol} className="border-b border-slate-800/40 hover:bg-slate-800/30">
                       <td className="py-2 font-bold text-slate-100">{pos.symbol}</td>
-                      <td className={`py-2 ${pos.qty >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {pos.qty >= 0 ? 'LONG' : 'SHORT'} {Math.abs(pos.qty).toFixed(4)}
+                      <td className={`py-2 ${isLong ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {isLong ? 'LONG' : 'SHORT'} {qtyStr}
                       </td>
                       <td className="py-2 text-slate-300">${pos.entry_price?.toFixed(2)}</td>
                       <td className="py-2 text-slate-200">${pos.current_price?.toFixed(2)}</td>

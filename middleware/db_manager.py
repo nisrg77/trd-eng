@@ -61,6 +61,40 @@ class MongoDatabaseManager:
                 {"$set": {"id": "primary_account", "updated_at": time.time(), **account_data}},
                 upsert=True
             )
+            # Sync positions collection with active positions from account
+            if "positions" in account_data and isinstance(account_data["positions"], dict):
+                positions_coll = self.db["positions"]
+                active_symbols = set()
+                for sym, pos_data in account_data["positions"].items():
+                    qty_val = float(pos_data.get("qty", 0.0))
+                    if abs(qty_val) < 1e-7:
+                        continue
+                    active_symbols.add(sym)
+                    entry_p = float(pos_data.get("entry_price", pos_data.get("price", 0.0)))
+                    curr_p = float(pos_data.get("current_price", pos_data.get("mark_price", entry_p)))
+                    unrl_pl = float(pos_data.get("unrealized_pl", pos_data.get("unrealized_pnl", 0.0)))
+                    doc = {
+                        "trade_id": pos_data.get("trade_id", ""),
+                        "symbol": sym,
+                        "side": pos_data.get("side", "long" if qty_val >= 0 else "short"),
+                        "qty": qty_val,
+                        "size": abs(qty_val),
+                        "entry_price": entry_p,
+                        "current_price": curr_p,
+                        "mark_price": curr_p,
+                        "unrealized_pl": unrl_pl,
+                        "unrealized_pnl": unrl_pl,
+                        "leverage": float(pos_data.get("leverage", 10.0)),
+                        "status": "open",
+                        "opened_at": pos_data.get("opened_at", ""),
+                        "updated_at": time.time()
+                    }
+                    positions_coll.update_one({"symbol": sym}, {"$set": doc}, upsert=True)
+                # Clean up any stale positions in positions collection not present in active_symbols
+                if active_symbols:
+                    positions_coll.delete_many({"symbol": {"$nin": list(active_symbols)}})
+                else:
+                    positions_coll.delete_many({})
             return True
         except Exception as e:
             log.error(f"[MongoDB] Error saving account state: {e}")
@@ -107,13 +141,29 @@ class MongoDatabaseManager:
             return False
         try:
             positions_coll = self.db["positions"]
+            qty_raw = position_data.get("qty")
+            if qty_raw is None:
+                qty_raw = position_data.get("size", 0.0)
+                if str(position_data.get("side", "")).lower() == "short":
+                    qty_raw = -abs(float(qty_raw))
+            qty_val = float(qty_raw or 0.0)
+            entry_p = float(position_data.get("entry_price", position_data.get("price", 0.0)))
+            curr_p = float(position_data.get("current_price", position_data.get("mark_price", entry_p)))
+            unrl_pl = float(position_data.get("unrealized_pl", position_data.get("unrealized_pnl", 0.0)))
             doc = {
+                "trade_id": position_data.get("trade_id", ""),
                 "symbol": symbol,
-                "qty": float(position_data.get("qty", 0.0)),
-                "entry_price": float(position_data.get("entry_price", 0.0)),
-                "current_price": float(position_data.get("current_price", position_data.get("entry_price", 0.0))),
-                "unrealized_pl": float(position_data.get("unrealized_pl", 0.0)),
+                "side": position_data.get("side", "long" if qty_val >= 0 else "short"),
+                "qty": qty_val,
+                "size": abs(qty_val),
+                "entry_price": entry_p,
+                "current_price": curr_p,
+                "mark_price": curr_p,
+                "unrealized_pl": unrl_pl,
+                "unrealized_pnl": unrl_pl,
                 "leverage": float(position_data.get("leverage", 10.0)),
+                "status": position_data.get("status", "open"),
+                "opened_at": position_data.get("opened_at", ""),
                 "updated_at": time.time()
             }
             positions_coll.update_one({"symbol": symbol}, {"$set": doc}, upsert=True)
@@ -142,6 +192,31 @@ class MongoDatabaseManager:
                 sym = doc.get("symbol")
                 if sym:
                     result[sym] = doc
+
+            # Cross-reference with primary_account positions to recover any 0.0 qty or missing entries
+            acc = self.db["account"].find_one({"id": "primary_account"}, {"_id": 0})
+            if acc and "positions" in acc and isinstance(acc["positions"], dict):
+                for sym, pos_data in acc["positions"].items():
+                    qty_val = float(pos_data.get("qty", 0.0))
+                    if abs(qty_val) > 1e-7:
+                        # If positions collection is missing sym or has 0 qty, repair it
+                        if sym not in result or abs(float(result[sym].get("qty", 0.0))) < 1e-7:
+                            result[sym] = {
+                                "trade_id": pos_data.get("trade_id", ""),
+                                "symbol": sym,
+                                "side": pos_data.get("side", "long" if qty_val >= 0 else "short"),
+                                "qty": qty_val,
+                                "size": abs(qty_val),
+                                "entry_price": float(pos_data.get("entry_price", 0.0)),
+                                "current_price": float(pos_data.get("current_price", pos_data.get("entry_price", 0.0))),
+                                "mark_price": float(pos_data.get("current_price", pos_data.get("entry_price", 0.0))),
+                                "unrealized_pl": float(pos_data.get("unrealized_pl", 0.0)),
+                                "unrealized_pnl": float(pos_data.get("unrealized_pl", 0.0)),
+                                "leverage": float(pos_data.get("leverage", 10.0)),
+                                "status": "open",
+                                "opened_at": pos_data.get("opened_at", ""),
+                                "updated_at": pos_data.get("updated_at", time.time())
+                            }
             return result
         except Exception as e:
             log.error(f"[MongoDB] Error querying active positions: {e}")

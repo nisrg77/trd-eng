@@ -67,20 +67,22 @@ export const ActivePositionsTable: React.FC<ActivePositionsTableProps> = ({ mark
               </tr>
             ) : (
               positions.map((pos) => {
-                const isLong   = pos.qty >= 0;
-                const pnlPos   = pos.unrealized_pl >= 0;
+                const isLong   = (pos.qty ?? 0) >= 0;
+                const pnlPos   = (pos.unrealized_pl ?? 0) >= 0;
                 const plPct    = (pos.unrealized_plpc ?? 0) * 100;
                 const entry    = pos.entry_price   ?? 0;
                 const current  = pos.current_price ?? 0;
                 const stop     = isLong ? entry * 0.985  : entry * 1.015;
                 const tp1      = isLong ? entry * 1.012  : entry * 0.988;
                 const tp2      = isLong ? entry * 1.024  : entry * 0.976;
+                const qtyVal   = Math.abs(pos.qty ?? pos.size ?? 0);
+                const qtyStr   = qtyVal < 0.01 ? qtyVal.toFixed(6) : qtyVal.toFixed(4);
 
                 return (
                   <tr key={pos.symbol}>
                     <td><b>{pos.symbol}</b></td>
                     <td><span className={`pill ${isLong ? 'long' : 'short'}`}>{isLong ? 'LONG' : 'SHORT'}</span></td>
-                    <td>{Math.abs(pos.qty).toFixed(4)}</td>
+                    <td>{qtyStr}</td>
                     <td>{money(entry)}</td>
                     <td>{money(current)}</td>
                     <td className={pnlPos ? 'pos' : 'neg'}>{money(pos.unrealized_pl ?? 0)}</td>

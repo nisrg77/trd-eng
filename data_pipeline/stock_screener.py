@@ -28,11 +28,16 @@ log = logging.getLogger(__name__)
 
 # ── TradingView Screener (for real-time prices) ────────────────────────────────
 try:
-    from tradingview_screener import Scanner
+    from tradingview_screener import stocks, col
     _TV_AVAILABLE = True
 except ImportError:
-    _TV_AVAILABLE = False
-    log.warning("[Screener] tradingview-screener not installed. pip install tradingview-screener")
+    try:
+        from tradingview_screener import Query, col
+        stocks = lambda: Query().set_markets("america")
+        _TV_AVAILABLE = True
+    except ImportError:
+        _TV_AVAILABLE = False
+        log.warning("[Screener] tradingview-screener not installed. pip install tradingview-screener")
 
 
 CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "screener_cache.json")
@@ -143,7 +148,60 @@ class StockScreener:
             return {"volume": 0, "ret_15m": 0.0, "ret_30m": 0.0}
 
     def _execute_full_analysis(self, count: int = 15) -> list[dict]:
-        """Runs the RVOL and momentum ranking across the 55 CME proxy universe."""
+        """Runs the RVOL and momentum ranking across the 55 CME proxy universe using TradingView Screener."""
+        if _TV_AVAILABLE:
+            try:
+                log.info("[Screener] Querying real-time TradingView Screener across %d SSF proxies...", len(CME_SSF_55_PROXIES))
+                count_tv, df_tv = (
+                    stocks()
+                    .select("name", "close", "change", "change_abs", "volume", "relative_volume_10d_calc")
+                    .where(col("name").isin(CME_SSF_55_PROXIES))
+                    .get_scanner_data()
+                )
+                if df_tv is not None and not df_tv.empty:
+                    results = []
+                    for _, row in df_tv.iterrows():
+                        sym = str(row.get("name", "")).strip()
+                        if not sym:
+                            continue
+                        price = round(float(row.get("close", 0) or 0), 2)
+                        chg_pct = round(float(row.get("change", 0) or 0), 2)
+                        chg_abs = round(float(row.get("change_abs", 0) or 0), 2)
+                        vol = int(row.get("volume", 0) or 0)
+                        rvol = round(float(row.get("relative_volume_10d_calc", 1.0) or 1.0), 2)
+                        mom = round(chg_pct / 100.0, 4)
+                        results.append({
+                            "symbol": sym,
+                            "price": price,
+                            "change_pct": chg_pct,
+                            "change_abs": chg_abs,
+                            "volume": vol,
+                            "rvol": rvol,
+                            "momentum": mom,
+                        })
+                    results.sort(key=lambda x: (x["rvol"], abs(x["momentum"])), reverse=True)
+                    candidates = []
+                    for idx, r in enumerate(results[:count]):
+                        mom = r["momentum"]
+                        bias = "BUY" if mom > 0.005 else ("SELL" if mom < -0.005 else "NEUTRAL")
+                        action = "LONG" if bias == "BUY" else ("SHORT" if bias == "SELL" else "HOLD")
+                        candidates.append({
+                            "rank": idx + 1,
+                            "symbol": r["symbol"],
+                            "price": r["price"],
+                            "change_pct": r["change_pct"],
+                            "change_abs": r["change_abs"],
+                            "volume": r["volume"],
+                            "rvol": r["rvol"],
+                            "momentum": r["momentum"],
+                            "bias": bias,
+                            "action": action
+                        })
+                    log.info("[Screener] Successfully generated %d rankings via TradingView Screener in <1s.", len(candidates))
+                    return candidates
+            except Exception as e:
+                log.warning("[Screener] TradingView query failed: %s. Falling back to Alpaca analysis...", e)
+
         log.info("[Screener] Running comprehensive 7-day analysis across %d SSF proxies...", len(CME_SSF_55_PROXIES))
         results = []
         
@@ -205,11 +263,11 @@ class StockScreener:
         try:
             symbols = [c["symbol"] for c in candidates]
             # Build TV screener query for our symbols
-            df, _ = (
-                Scanner.us_stocks()
-                .select("name", "close", "change", "change_abs", "volume", "relative_volume")
+            count, df = (
+                stocks()
+                .select("name", "close", "change", "change_abs", "volume", "relative_volume_10d_calc")
                 .where(
-                    Scanner.col("name").isin(symbols)
+                    col("name").isin(symbols)
                 )
                 .get_scanner_data()
             )
@@ -224,7 +282,7 @@ class StockScreener:
                         "price": round(float(row.get("close", 0)), 2),
                         "change_pct": round(float(row.get("change", 0)), 2),
                         "change_abs": round(float(row.get("change_abs", 0)), 2),
-                        "rvol": round(float(row.get("relative_volume", 1.0)), 2),
+                        "rvol": round(float(row.get("relative_volume_10d_calc", 1.0) or 1.0), 2),
                     }
             # Enrich candidates
             for c in candidates:

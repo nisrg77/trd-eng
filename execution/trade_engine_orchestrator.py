@@ -184,9 +184,9 @@ class TradeEngineOrchestrator:
                 "features": features,
             }
 
-            # Fetch current instrument positions for the engine
+            # Fetch current portfolio exposures and instrument positions for the engine
+            current_exposure, instrument_data = self.oms.get_portfolio_exposures()
             account_state = self.oms.get_account_state()
-            instrument_data = account_state.get("positions", {})
 
             # Gate layers 1–4: Goal, Conviction, IFF, Micro-buffer
             proposed_order = self.execution_engine.size_order(signal, instrument_data)
@@ -197,7 +197,7 @@ class TradeEngineOrchestrator:
 
             # Gate layer 5: Risk Guard — circuit breaker, session, exposure, concentration
             self.risk_guard.update_state(
-                current_exposure=account_state.get("exposure_pct", 0.0),
+                current_exposure=current_exposure,
                 instrument_exposures=instrument_data,
                 current_equity=account_state.get("equity", 1000.0),
             )

@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+import requests
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -116,15 +117,60 @@ DEFAULT_PRICES = {
     "PYPL": 78.0,
 }
 
+_price_cache: dict[str, tuple[float, float]] = {}
+
 def fetch_symbol_last_price(symbol: str) -> float:
-    if symbol in DEFAULT_PRICES:
-        return DEFAULT_PRICES[symbol]
+    now = time.time()
+    if symbol in _price_cache:
+        cached_p, ts = _price_cache[symbol]
+        if now - ts < 5.0:
+            return cached_p
+
+    # 1. Check active positions
+    account = read_json_safe(ACCOUNT_FILE, default={})
+    if symbol in account.get("positions", {}):
+        p = account["positions"][symbol].get("current_price") or account["positions"][symbol].get("entry_price")
+        if p and p > 0:
+            _price_cache[symbol] = (float(p), now)
+            return float(p)
+
+    # 2. Check latest signals
     signals = read_json_safe(SIGNALS_FILE, default={})
     if symbol in signals and signals[symbol]:
         c = signals[symbol][-1].get("ohlcv", {}).get("close")
-        if c:
+        if c and float(c) > 0:
+            _price_cache[symbol] = (float(c), now)
             return float(c)
-    return 150.0
+
+    # 3. Real-time Crypto via Binance API
+    if any(c in symbol for c in ["BTC", "ETH", "SOL", "BNB", "XRP"]):
+        try:
+            binance_sym = symbol.replace("-USD", "USDT").replace("-", "").upper()
+            resp = requests.get(f"https://api.binance.com/api/v3/ticker/price?symbol={binance_sym}", timeout=1.5)
+            if resp.status_code == 200:
+                live_p = float(resp.json().get("price", 0.0))
+                if live_p > 0:
+                    _price_cache[symbol] = (live_p, now)
+                    return live_p
+        except Exception:
+            pass
+
+    # 4. Real-time US Stocks via TradingView Screener
+    try:
+        from tradingview_screener import stocks, col
+        clean_sym = symbol.replace("-USD", "").upper()
+        count, df = stocks().select("name", "close").where(col("name").isin([clean_sym])).get_scanner_data()
+        if df is not None and not df.empty:
+            tv_p = float(df["close"].iloc[0])
+            if tv_p > 0:
+                _price_cache[symbol] = (tv_p, now)
+                return tv_p
+    except Exception:
+        pass
+
+    fallback = DEFAULT_PRICES.get(symbol, 150.0)
+    _price_cache[symbol] = (fallback, now)
+    return fallback
 
 def _format_screener_response(cache_data):
     candidates = cache_data.get("top_candidates", cache_data.get("candidates", []))
@@ -234,6 +280,23 @@ def reset_paper_trading_api():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.get("/api/klines")
+def get_klines(symbol: str = "BTC-USD", limit: int = 50):
+    p = fetch_symbol_last_price(symbol)
+    now_sec = (int(time.time()) // 5) * 5
+    history = []
+    for i in range(limit, 0, -1):
+        t = now_sec - (i * 5)
+        var = max(0.02, p * 0.0003)
+        o = round(p + random.uniform(-var, var), 2)
+        h = round(max(o, p) + random.uniform(0.01, var), 2)
+        l = round(min(o, p) - random.uniform(0.01, var), 2)
+        c = round(p, 2)
+        v = round(random.uniform(5.0, 100.0), 2)
+        history.append({"time": t, "open": o, "high": h, "low": l, "close": c, "volume": v})
+        p = c
+    return {"symbol": symbol, "candles": history}
+
 @app.websocket("/ws/trading")
 async def websocket_endpoint(websocket: WebSocket, symbol: str = "BTC-USD"):
     await websocket.accept()
@@ -268,20 +331,32 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str = "BTC-USD"):
 
         await websocket.send_json({"type": "HISTORICAL_CANDLES", "payload": history})
 
+        current_bar = None
+
         while True:
 
-            # 1. Read simulated account state
-            account = read_json_safe(ACCOUNT_FILE, default={
-                "equity": 1000.0,
-                "realized_pl": 0.0,
-                "positions": {}
-            })
+            # 1. Read simulated account state (prefer live MongoDB Atlas state if connected)
+            from middleware.db_manager import mongo_db
+            account = None
+            if mongo_db.is_connected():
+                account = mongo_db.get_account()
+                if account:
+                    account["positions"] = mongo_db.get_active_positions()
+            if not account:
+                account = read_json_safe(ACCOUNT_FILE, default={
+                    "equity": 1000.0,
+                    "realized_pl": 0.0,
+                    "positions": {}
+                })
             
             # Read latest signals
             signals_data = read_json_safe(SIGNALS_FILE, default={})
             
-            # Extract current price for symbol if in positions or latest signal
-            if symbol in account.get("positions", {}):
+            # Dynamically refresh current price from live market feeds (Binance / TradingView Screener)
+            live_p = fetch_symbol_last_price(symbol)
+            if live_p and live_p > 0:
+                current_price = live_p
+            elif symbol in account.get("positions", {}):
                 pos = account["positions"][symbol]
                 if pos.get("current_price"):
                     current_price = pos["current_price"]
@@ -295,26 +370,32 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str = "BTC-USD"):
                 "payload": account
             })
 
-            # 2. Emit tick data scaled to instrument price
+            # 2. Emit tick data aggregated into consistent 5-second candlestick bars
             now_ts = int(time.time())
-            # Floor to 5-second bar bucket
             bar_time = (now_ts // 5) * 5
-            max_var = max(0.02, current_price * 0.0003)
-            price_variation = random.uniform(-max_var, max_var)
-            current_price = max(1.0, current_price + price_variation)
+            max_var = max(0.02, current_price * 0.00015)
+            sub_variation = random.uniform(-max_var, max_var)
+            tick_p = round(max(1.0, current_price + sub_variation), 2)
             
-            tick_payload = {
-                "time": bar_time,
-                "open": round(current_price - random.uniform(-max_var * 0.5, max_var * 0.5), 2),
-                "high": round(current_price + random.uniform(max_var * 0.2, max_var), 2),
-                "low": round(current_price - random.uniform(max_var * 0.2, max_var), 2),
-                "close": round(current_price, 2),
-                "volume": round(random.uniform(1.0, 50.0), 2)
-            }
-            await websocket.send_json({"type": "TICK", "payload": tick_payload})
+            if current_bar is None or current_bar["time"] != bar_time:
+                current_bar = {
+                    "time": bar_time,
+                    "open": tick_p,
+                    "high": tick_p,
+                    "low": tick_p,
+                    "close": tick_p,
+                    "volume": round(random.uniform(2.0, 10.0), 2)
+                }
+            else:
+                current_bar["high"] = max(current_bar["high"], tick_p)
+                current_bar["low"] = min(current_bar["low"], tick_p)
+                current_bar["close"] = tick_p
+                current_bar["volume"] = round(current_bar["volume"] + random.uniform(0.1, 1.5), 2)
+
+            await websocket.send_json({"type": "TICK", "payload": current_bar})
 
             # 3. Emit live Order Book update
-            order_book = generate_mock_order_book(current_price)
+            order_book = generate_mock_order_book(current_bar["close"])
             await websocket.send_json({"type": "ORDER_BOOK", "payload": order_book})
 
             # 4. Read ML Signals

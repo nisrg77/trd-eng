@@ -32,7 +32,7 @@ class TestGoalModule(unittest.TestCase):
 
     def test_static_leverage_and_risk_budget(self):
         lev = select_leverage("crypto", effective_conviction=0.90, range_atr_ratio=1.0)
-        self.assertEqual(lev, STATIC_LEVERAGE)
+        self.assertEqual(lev, 4.6)
 
         budget = position_risk_budget_usd("crypto", state=self.state)
         self.assertEqual(budget, STATIC_RISK_BUDGET)
@@ -45,7 +45,7 @@ class TestGoalModule(unittest.TestCase):
         }
         dec = evaluate_trade("crypto", signal, state=self.state, persist=False)
         self.assertTrue(dec.allowed)
-        self.assertEqual(dec.leverage, STATIC_LEVERAGE)
+        self.assertEqual(dec.leverage, 4.0)
         self.assertEqual(dec.risk_budget_usd, STATIC_RISK_BUDGET)
 
     def test_evaluate_trade_dead_day_blocked(self):

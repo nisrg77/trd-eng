@@ -391,7 +391,11 @@ export const CryptoTerminal: React.FC = () => {
                   </tr>
                 ) : (
                   cryptoPositions.map(([symbol, pos]: [string, any]) => {
-                    const side = pos.qty > 0 ? 'LONG' : 'SHORT';
+                    const rawQty = pos.qty ?? pos.size ?? 0;
+                    const isLong = String(pos.side || '').toLowerCase() === 'long' || rawQty >= 0;
+                    const side = isLong ? 'LONG' : 'SHORT';
+                    const absQty = Math.abs(rawQty);
+                    const qtyDisplay = absQty < 0.01 ? absQty.toFixed(6) : absQty.toFixed(4);
                     const entryPrice = pos.entry_price || currentPrice;
                     const markPrice = pos.current_price || currentPrice;
                     const pnlVal = pos.unrealized_pl || 0;
@@ -403,7 +407,7 @@ export const CryptoTerminal: React.FC = () => {
                             {side}
                           </span>
                         </td>
-                        <td className="py-2.5 px-3">{Math.abs(pos.qty).toFixed(4)}</td>
+                        <td className="py-2.5 px-3">{qtyDisplay}</td>
                         <td className="py-2.5 px-3">${entryPrice.toFixed(2)}</td>
                         <td className="py-2.5 px-3">${markPrice.toFixed(2)}</td>
                         <td className="py-2.5 px-3 text-secondary">{pos.leverage || '5.0'}x</td>

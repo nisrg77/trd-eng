@@ -122,43 +122,50 @@ def test_engine_health_schema_keys():
 
 
 def test_oms_position_lifecycle_events():
-    """Verify OMS publishes open, tick, and closed position_update events."""
-    oms = SimulatedFuturesOMS()
-    
-    # 1. Open new LONG position
-    order = {
-        "order_id": "ord_life_1",
-        "instrument": "SOL-USD",
-        "action": "BUY",
-        "portfolio_allocation_pct": 0.05,
-        "dynamic_leverage": 10.0,
-        "risk_state": "APPROVED"
-    }
-    oms.submit_order(order, current_price=150.0, obi_rho=0.0)
+    """Verify OMS publishes open, tick, and closed position_update events without polluting state."""
+    import tempfile
+    fd, tmp_state = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        oms = SimulatedFuturesOMS(state_file=tmp_state)
+        
+        # 1. Open new LONG position
+        order = {
+            "order_id": "ord_life_1",
+            "instrument": "SOL-USD",
+            "action": "BUY",
+            "portfolio_allocation_pct": 0.05,
+            "dynamic_leverage": 10.0,
+            "risk_state": "APPROVED"
+        }
+        oms.submit_order(order, current_price=150.0, obi_rho=0.0)
 
-    active_pos = event_bus.get_active_positions()
-    sol_pos = next((p for p in active_pos if p["symbol"] == "SOL-USD"), None)
-    assert sol_pos is not None, "SOL-USD position should be active!"
-    assert sol_pos["status"] == "open"
-    assert sol_pos["trade_id"].startswith("trd_")
-    assert sol_pos["opened_at"] is not None
-    assert sol_pos["closed_at"] is None
-    assert sol_pos["exit_price"] is None
+        active_pos = event_bus.get_active_positions()
+        sol_pos = next((p for p in active_pos if p["symbol"] == "SOL-USD"), None)
+        assert sol_pos is not None, "SOL-USD position should be active!"
+        assert sol_pos["status"] == "open"
+        assert sol_pos["trade_id"].startswith("trd_")
+        assert sol_pos["opened_at"] is not None
+        assert sol_pos["closed_at"] is None
+        assert sol_pos["exit_price"] is None
 
-    # 2. Update price (mark-to-market tick)
-    oms.update_prices({"SOL-USD": 160.0})
-    updated_pos = next((p for p in event_bus.get_active_positions() if p["symbol"] == "SOL-USD"), None)
-    assert updated_pos is not None
-    assert updated_pos["mark_price"] == 160.0
-    assert updated_pos["unrealized_pnl"] > 0.0
+        # 2. Update price (mark-to-market tick)
+        oms.update_prices({"SOL-USD": 160.0})
+        updated_pos = next((p for p in event_bus.get_active_positions() if p["symbol"] == "SOL-USD"), None)
+        assert updated_pos is not None
+        assert updated_pos["mark_price"] == 160.0
+        assert updated_pos["unrealized_pnl"] > 0.0
 
-    # 3. Trigger full close via stop/exit
-    exits = oms.update_prices({"SOL-USD": 100.0}) # Trigger ATR stop
-    all_events = event_bus.get_recent_events()
-    closed_events = [e for e in all_events if e["type"] == "position_update" and e["data"]["symbol"] == "SOL-USD" and e["data"]["status"] == "closed"]
-    assert len(closed_events) >= 1, "Should emit position_update with status='closed' upon full exit!"
-    closed_data = closed_events[-1]["data"]
-    assert closed_data["status"] == "closed"
-    assert closed_data["exit_price"] is not None
-    assert closed_data["closed_at"] is not None
-    assert closed_data["realized_pnl"] is not None
+        # 3. Trigger full close via stop/exit
+        exits = oms.update_prices({"SOL-USD": 100.0}) # Trigger ATR stop
+        all_events = event_bus.get_recent_events()
+        closed_events = [e for e in all_events if e["type"] == "position_update" and e["data"]["symbol"] == "SOL-USD" and e["data"]["status"] == "closed"]
+        assert len(closed_events) >= 1, "Should emit position_update with status='closed' upon full exit!"
+        closed_data = closed_events[-1]["data"]
+        assert closed_data["status"] == "closed"
+        assert closed_data["exit_price"] is not None
+        assert closed_data["closed_at"] is not None
+        assert closed_data["realized_pnl"] is not None
+    finally:
+        if os.path.exists(tmp_state):
+            os.remove(tmp_state)

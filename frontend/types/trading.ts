@@ -31,12 +31,21 @@ export interface MLSignal {
 }
 
 export interface Position {
-  instrument: Instrument;
+  instrument?: Instrument;
+  symbol?: Instrument;
   qty: number;
+  size?: number;
+  side?: string;
+  leverage?: number;
   entry_price: number;
   current_price: number;
+  mark_price?: number;
   unrealized_pl: number;
-  unrealized_plpc: number;
+  unrealized_plpc?: number;
+  realized_pnl?: number;
+  realized_pl?: number;
+  status?: string;
+  opened_at?: string;
 }
 
 export interface AccountState {
@@ -64,6 +73,10 @@ export interface OrderExecution {
   oms_state: 'SUBMITTED' | 'FILLED' | 'FAILED' | 'SKIPPED_BY_RISK';
   oms_detail?: string;
   notional_value?: number;
+  qty?: number;
+  quantity?: number;
+  price?: number;
+  realized_pnl?: number;
 }
 
 export interface OrderBookLevel {

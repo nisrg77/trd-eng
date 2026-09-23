@@ -70,12 +70,13 @@ def _snap_tp(
 
 
 class SimulatedFuturesOMS:
-    def __init__(self):
+    def __init__(self, state_file: str = None):
+        self.state_file = state_file or _STATE_FILE
         self._init_state()
 
     def _init_state(self):
         """Initialize local account state."""
-        if not os.path.exists(_STATE_FILE):
+        if not os.path.exists(self.state_file):
             default_state = {
                 "equity": 1000.0,
                 "realized_pl": 0.0,
@@ -86,14 +87,14 @@ class SimulatedFuturesOMS:
     def _read_state(self) -> dict:
         with _lock:
             try:
-                with open(_STATE_FILE, "r") as f:
+                with open(self.state_file, "r") as f:
                     return json.load(f)
             except Exception:
                 return {"equity": 1000.0, "realized_pl": 0.0, "positions": {}}
 
     def _write_state(self, state: dict):
         with _lock:
-            with open(_STATE_FILE, "w") as f:
+            with open(self.state_file, "w") as f:
                 json.dump(state, f, indent=2)
             try:
                 from middleware.db_manager import mongo_db
@@ -390,7 +391,8 @@ class SimulatedFuturesOMS:
             "margin_level_pct": round(margin_level_pct, 2),
             "gross_buying_power": round(gross_buying_power, 2),
             "buying_power": round(available_buying_power, 2),
-            "cash": round(balance, 2)
+            "cash": round(balance, 2),
+            "positions": state.get("positions", {})
         }
 
     def get_portfolio_exposures(self) -> tuple[float, dict[str, dict]]:
@@ -462,10 +464,12 @@ class SimulatedFuturesOMS:
             evaluated_order["oms_detail"] = "Invalid price."
             return evaluated_order
             
-        is_crypto = symbol in ["BTC-USD", "ETH-USD"]
+        is_crypto = symbol in getattr(config, "CRYPTO_INSTRUMENTS", ["BTC-USD", "ETH-USD"]) or any(c in symbol for c in ["BTC", "ETH", "SOL", "BNB", "XRP"])
         asset_class = "crypto" if is_crypto else "stock"
         dynamic_lev = float(evaluated_order.get("dynamic_leverage", config.FUTURES_LEVERAGE))
         risk_budget = float(evaluated_order.get("risk_budget_usd", 10.0))
+        decimals = 6 if is_crypto else 4
+        min_qty_thresh = 1e-6 if is_crypto else 1e-4
         
         if not is_crypto:
             # US Futures / Stock: Risk budget based sizing with dynamic leverage
@@ -516,7 +520,7 @@ class SimulatedFuturesOMS:
             new_qty = old_qty + order_qty
             
             # Position flip or complete close
-            if abs(new_qty) < 0.0001 or (old_qty > 0 and new_qty < 0) or (old_qty < 0 and new_qty > 0):
+            if abs(new_qty) < min_qty_thresh or (old_qty > 0 and new_qty < 0) or (old_qty < 0 and new_qty > 0):
                 # Emit closed event for the previous position
                 event_bus.publish_position_update(
                     trade_id=old_trade_id,
@@ -534,7 +538,7 @@ class SimulatedFuturesOMS:
                     realized_pnl=pos.get("realized_pnl")
                 )
                 
-                if abs(new_qty) < 0.0001:
+                if abs(new_qty) < min_qty_thresh:
                     del state["positions"][symbol]
                 else:
                     # Direction flip: create new position record for the reversed direction
@@ -627,8 +631,8 @@ class SimulatedFuturesOMS:
         evaluated_order["alpaca_order_id"] = "sim_" + uuid.uuid4().hex[:8]
         evaluated_order["notional_value"] = notional_value
         evaluated_order["price"] = fill_price
-        evaluated_order["qty"] = round(order_qty, 4)
-        evaluated_order["quantity"] = round(abs(order_qty), 4)
+        evaluated_order["qty"] = round(order_qty, decimals)
+        evaluated_order["quantity"] = round(abs(order_qty), decimals)
         evaluated_order["timestamp_executed"] = time.time()
         evaluated_order["realized_pnl"] = 0.0
 
@@ -637,7 +641,7 @@ class SimulatedFuturesOMS:
             level="fill",
             category="entry_fill",
             symbol=symbol,
-            message=f"Order filled for {action} {abs(order_qty):.4f} {symbol} @ ${fill_price:.2f}",
+            message=f"Order filled for {action} {abs(order_qty):.{decimals}f} {symbol} @ ${fill_price:.2f}",
             order_id=evaluated_order.get("order_id")
         )
 
