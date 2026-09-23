@@ -1,5 +1,6 @@
 version: '3.8'
 
+services:
   # Next.js Frontend Dashboard (Port 3000)
   frontend:
     build: ./frontend
