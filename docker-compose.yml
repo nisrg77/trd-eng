@@ -32,3 +32,17 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+
+  # Next.js Frontend Dashboard (Port 3000)
+  frontend:
+    build:
+      context: ./frontend
+    container_name: trdeng-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+    depends_on:
+      - ws-server
+
