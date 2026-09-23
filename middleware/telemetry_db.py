@@ -7,7 +7,9 @@ Logs latency, slippage, trade fills, and HMM state transitions to `telemetry.db`
 import sqlite3
 import os
 import logging
-from datetime import datetime, timezone
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.time_utils import now_ist_iso
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +52,7 @@ class TelemetryDB:
                 self.conn.execute(
                     """INSERT INTO executions (timestamp, instrument, action, qty, price, slippage, latency_ms, hmm_state) 
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (datetime.now(timezone.utc).isoformat(), instrument, action, qty, price, slippage, latency_ms, hmm_state)
+                    (now_ist_iso(), instrument, action, qty, price, slippage, latency_ms, hmm_state)
                 )
             log.debug(f"[Telemetry] Logged execution for {instrument} ({action})")
         except Exception as e:
@@ -62,7 +64,7 @@ class TelemetryDB:
                 self.conn.execute(
                     """INSERT INTO hmm_states (timestamp, instrument, state, likelihood) 
                        VALUES (?, ?, ?, ?)""",
-                    (datetime.now(timezone.utc).isoformat(), instrument, state, likelihood)
+                    (now_ist_iso(), instrument, state, likelihood)
                 )
         except Exception as e:
             log.error(f"[Telemetry] Error logging HMM state: {e}")

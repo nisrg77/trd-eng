@@ -41,6 +41,8 @@ logging.basicConfig(
     format="%(asctime)s [BACKEND] %(levelname)s  %(message)s",
     datefmt="%H:%M:%S",
 )
+import utils.time_utils as time_utils
+logging.Formatter.converter = lambda *args: time_utils.now_ist().timetuple()
 log = logging.getLogger(__name__)
 
 

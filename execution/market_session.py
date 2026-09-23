@@ -21,6 +21,8 @@ except ImportError:
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
+from utils.time_utils import now_ist_iso
+
 
 US_EASTERN_TZ = ZoneInfo("America/New_York")
 
@@ -136,6 +138,7 @@ def get_market_sessions_summary() -> dict:
     return {
         "us": us_info,
         "crypto": crypto_info,
-        "server_time_utc": datetime.utcnow().isoformat() + "Z",
+        "server_time_ist": now_ist_iso(),
         "ny_time": get_current_ny_time().strftime("%Y-%m-%d %H:%M:%S %Z"),
     }
+

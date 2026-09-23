@@ -26,6 +26,12 @@ except Exception:
     def get_flow_score(s, r=0.0):       return 0.0      # type: ignore
     def get_cot_zscore(s):              return 0.0      # type: ignore
 
+import logging
+from utils.time_utils import now_ist
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [WS] %(levelname)s %(message)s", datefmt="%H:%M:%S")
+logging.Formatter.converter = lambda *args: now_ist().timetuple()
+log = logging.getLogger(__name__)
+
 app = FastAPI(title="TEDENG ML Engine WebSocket Server")
 
 app.add_middleware(
@@ -127,9 +133,12 @@ def _format_screener_response(cache_data):
     age_days = 0.0
     if last_updated:
         try:
-            from datetime import datetime, timezone
-            dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
-            age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
+            if isinstance(last_updated, (int, float)):
+                age_days = (time.time() - float(last_updated)) / 86400.0
+            else:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(str(last_updated).replace("Z", "+00:00"))
+                age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
         except Exception:
             age_days = 0.0
     return {

@@ -12,11 +12,13 @@ import threading
 from datetime import datetime, timezone
 from collections import deque
 from typing import Dict, List, Optional, Any
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.time_utils import now_ist_iso, ts_to_ist_iso
 
 def to_iso8601(ts: Optional[float] = None) -> str:
-    """Converts unix timestamp float (or current time if None) to UTC ISO8601 string."""
-    dt = datetime.fromtimestamp(ts or time.time(), tz=timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    """Converts unix timestamp (or current time) to IST ISO8601 string."""
+    return ts_to_ist_iso(ts or time.time())
 
 class EventBus:
     def __init__(self):
