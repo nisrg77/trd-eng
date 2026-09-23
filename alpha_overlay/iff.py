@@ -130,25 +130,32 @@ def apply_iff_gate(
     tuple of (gated_signal: float, flow_score: float, iff_veto: bool)
     """
     flow_score = get_flow_score(symbol, obi_rho)
-    veto_threshold = getattr(config, "IFF_VETO_THRESHOLD", 0.5)
+    # Raised from 0.5 → 0.65 to avoid over-vetoing on noisy OBI reads
+    veto_threshold = getattr(config, "IFF_VETO_THRESHOLD", 0.65)
 
     # Record flow tick timestamp for micro-buffer dwell tracking
     _record_flow_tick(symbol, flow_score)
 
-    # Opposing: ML says BUY (s_composite > 0) but flow is bearish (flow_score < -veto_threshold),
-    # or ML says SELL (s_composite < 0) but flow is bullish (flow_score > veto_threshold)
-    opposing_long  = s_composite > 0 and flow_score < -veto_threshold
-    opposing_short = s_composite < 0 and flow_score >  veto_threshold
+    is_crypto = symbol in getattr(config, "CRYPTO_INSTRUMENTS", [])
 
-    if opposing_long or opposing_short:
-        log.info(
-            "IFF GATE VETO  %-10s  S_composite=%.3f  S_flow=%.3f  (threshold=%.2f)",
-            symbol, s_composite, flow_score, veto_threshold,
-        )
-        return 0.0, round(flow_score, 6), True
+    # Hard veto: ML direction directly opposes strong institutional flow.
+    # For CRYPTO: skip hard veto entirely — OBI is too noisy on crypto to be trusted
+    #             as a hard signal gate. Use soft scaling only.
+    # For STOCKS: apply hard veto only when |S_flow| > veto_threshold (0.65)
+    if not is_crypto:
+        opposing_long  = s_composite > 0 and flow_score < -veto_threshold
+        opposing_short = s_composite < 0 and flow_score >  veto_threshold
 
-    # Graduated soft scaling: S_composite * (1 + 0.5 * S_flow)
-    scale = 1.0 + 0.5 * flow_score
+        if opposing_long or opposing_short:
+            log.info(
+                "IFF GATE VETO  %-10s  S_composite=%.3f  S_flow=%.3f  (threshold=%.2f)",
+                symbol, s_composite, flow_score, veto_threshold,
+            )
+            return 0.0, round(flow_score, 6), True
+
+    # Soft scaling: cap boost/penalty at ±30% to avoid overcorrecting
+    # S_composite * (1 + 0.3 * S_flow)  → range clipped to [-1, 1]
+    scale = 1.0 + 0.3 * flow_score
     gated = float(np.clip(s_composite * scale, -1.0, 1.0))
     return round(gated, 6), round(flow_score, 6), False
 

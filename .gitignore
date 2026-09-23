@@ -11,3 +11,11 @@ __pycache__/
 frontend/node_modules/
 .next/
 *.log
+
+# Scratch/debug scripts — never commit
+scratch/
+check_db.py
+check_*.py
+signals_store.json
+execution_store.json
+simulated_account.json
