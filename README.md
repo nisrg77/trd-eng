@@ -1,94 +1,114 @@
-# TEDENG — Algorithmic Trading Core Brain
+# TRDENG — Quantitative Algorithmic Execution Engine & Trading Terminal
 
-A microservices-style **Prediction Engine** for algorithmic trading.
+A high-performance **Prediction Engine**, **Risk Guard**, and **Institutional Trading Terminal** for algorithmic trading, featuring an **Institutional Footprint & Flow (IFF)** overlay, **Goal & Risk Gating Module**, **Dead-Day Filter**, **Dynamic Leverage Curve**, and a **Stitch MCP UI Presentation Layer**.
 
 ```
-Raw Feed → [DP] → [PP] → [M1/M2/M3] → [MA] → [SS] → [MB] → Dashboard
+Raw Feed (yfinance + Alpaca REST + Binance aggTrade WS)
+   │
+   ▼
+[DP Pipeline] ──► [Feature Preprocessor] ──► [Ensemble Models: Ridge + XGB + LSTM] ──► [Meta-Aggregator] 
+                                                                                            │
+[Microstructure (VAP / CVD)] ──────► [IFF Flow Score & Veto Gate] ◄────────────────────────┘
+[Macro Bias (CFTC COT)]                     │
+                                            ▼
+[Dead-Day Filter] ─────────────► [Goal & Risk Gating Module] ──► [Simulated OMS] ──► Stitch MCP UI Terminal
+(Chop Session Detection)         (Monthly Ceilings & Circuit Breakers)                (Crypto / US Futures / Logs)
 ```
 
-## Architecture
+---
+
+## System Architecture
 
 | Layer | File | Description |
 |---|---|---|
-| **DP** | `data_pipeline/pipeline.py` | yfinance OHLCV + frac-diff, GARCH vol, RSI, OBI |
-| **PP** | `brain/preprocessor.py` | Rolling Z-score normalisation + imputation |
-| **M1** | `brain/models/ridge_model.py` | Ridge Regression (statistical baseline) |
-| **M2** | `brain/models/xgb_model.py` | XGBoost (non-linear ML) |
-| **M3** | `brain/models/lstm_model.py` | 2-layer LSTM (temporal sequence) |
-| **MA** | `brain/meta_aggregator.py` | Regime-based dynamic weight blending |
-| **SS** | `brain/signal_standardizer.py` | Canonical signal packet `{magnitude, confidence, ts}` |
-| **MB** | `middleware/broker.py` | Redis Pub/Sub (auto-fallback to in-process queue) |
-| **UI** | `services/run_dashboard.py` | Streamlit live prediction dashboard |
+| **STATE** | `core/symbol_state.py` | `SymbolStateRegistry` thread-safe singleton for unified historical state management. |
+| **DP** | `data_pipeline/pipeline.py` | yfinance & Alpaca OHLCV + frac-diff, GARCH vol, RSI, OBI (+ Binance `aggTrade` live tick feed). |
+| **DEAD-DAY** | `data_pipeline/dead_day_filter.py` | Chop session detector: Range/ATR $< 0.85$, RVOL $< 0.70$, Realized Vol $< 0.008$. Collapses conviction to $0.0$. |
+| **PP** | `brain/preprocessor.py` | Rolling Z-score normalisation + imputation. |
+| **M1 / M2 / M3** | `brain/models/` | Ridge Regression, XGBoost, and 2-layer LSTM ensemble models. |
+| **MA** | `brain/meta_aggregator.py` | Regime-based dynamic weight blending + IFF directional veto/scale. |
+| **VAP/CVD** | `alpha_overlay/vap_cvd.py` | 500-bin incremental VAP histogram (VPOC/VAH/VAL) + CVD divergence tracker. |
+| **IFF** | `alpha_overlay/iff.py` | Composite Institutional Flow Score ($S_{\text{flow}}$) and Non-blocking 5ms Micro-Buffer Hold Window. |
+| **COT** | `alpha_overlay/cot_bias.py` | CFTC Disaggregated COT macro bias tracker (CME futures proxy for crypto). |
+| **GOAL & RISK** | `goals/goal_module.py` | Monthly Ceilings (20 Crypto / 80 Stocks), Multi-Horizon Circuit Breakers (4% daily loss, 18% monthly drawdown), Dynamic Leverage ($1\times - 5\times$ Crypto / $1\times - 10\times$ Stocks). |
+| **SESSION** | `execution/market_session.py` | RTH session gating (Mon–Fri 09:30–16:00 ET for US Equities / 24-7 for Crypto). |
+| **EE** | `execution/engine.py` | 9-Layer Execution Cadence mapping signals through state, dead-day, goals, and risk modules. |
+| **OMS** | `execution/simulated_oms.py` | Risk-budget USD sizing, ATR trailing stop, and VPOC/VAH/VAL take-profit snapping. |
+| **AUDIT** | `core/decision_trace.py` | `DecisionTrace` diagnostic logging to `decision_trace.jsonl` for full auditability. |
+| **WS** | `services/ws_server.py` | FastAPI WebSocket server streaming `TICK`, `GOAL_UPDATE`, `QUOTA_UPDATE`, `SCREENER_UPDATE`, `MICROSTRUCTURE`, and `/api/decision-traces`. |
+| **UI** | `frontend/` | Stitch MCP Next.js Trading Terminal featuring Crypto Perpetuals (`/crypto`), US Futures (`/us-futures`), and Trade Logs (`/trade-logs`). |
+
+---
 
 ## Quick Start
 
 ### 1. Install dependencies
 ```bash
 pip install -r requirements.txt
+cd frontend && npm install && cd ..
 ```
 
-### 2. (Optional) Start Redis
+### 2. Run background services
 ```bash
-docker run -d -p 6379:6379 redis
-# OR — if Redis is unavailable, the broker auto-falls back to in-process queue
+# Terminal 1 — FastAPI WebSocket Server
+python services/ws_server.py
+
+# Terminal 2 — Unified Backend Engine
+python services/run_backend.py
+
+# Terminal 3 — Next.js Institutional Trading Terminal
+cd frontend && npm run dev
+# Open http://localhost:3000 in your browser
 ```
 
-### 3. Run services (three separate terminals)
-
-**Terminal 1 — Data Pipeline**
+### 3. Run test suite
 ```bash
-python services/run_data_pipeline.py
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
-**Terminal 2 — Core Brain**
-```bash
-python services/run_brain.py
-```
+---
 
-**Terminal 3 — Dashboard**
-```bash
-streamlit run services/run_dashboard.py
-```
+## Signal & Goal Telemetry Schemas
 
-### 4. Run tests
-```bash
-pytest tests/ -v
-```
-
-## Configuration
-
-All parameters live in [`config.py`](config.py):
-
-```python
-INSTRUMENTS = ["BTC-USD", "ETH-USD", "AAPL", "SPY"]   # targets
-POLL_INTERVAL_SECONDS = 30                              # data fetch cadence
-LSTM_SEQ_LEN = 30                                       # LSTM window
-REGIME_VOL_THRESHOLD_HIGH = 0.020                       # vol > this → high_vol
-```
-
-## Signal Packet Schema
-
+### Signal Packet Schema
 ```json
 {
-  "signal_id":           "sig_98a7f62b",
+  "signal_id": "sig_98a7f62b",
   "timestamp_generated": 1698245612.482,
-  "instrument":          "BTC-USD",
+  "instrument": "BTC-USD",
   "direction_magnitude": 0.65,
-  "confidence_score":    0.82,
-  "regime_flag":         "high_volatility",
-  "latency_ms":          77,
-  "per_model":           {"ridge": 0.50, "xgb": 0.60, "lstm": 0.80},
-  "weights_used":        {"ridge": 0.10, "xgb": 0.30, "lstm": 0.60}
+  "confidence_score": 0.82,
+  "conviction_score": 0.82,
+  "regime_flag": "high_volatility",
+  "flow_score": 0.21,
+  "iff_veto": false,
+  "latency_ms": 77
 }
 ```
 
-## Latency Budget
-
-| Stage | Target |
-|---|---|
-| DP → PP (feature delivery) | ~5 ms |
-| PP → Ensemble models | ~20 ms |
-| Ensemble → MA → SS | ~77 ms |
-| SS → MB (publish) | ~2 ms |
-| MB → consumer | ~3 ms |
-| **Total** | **< 120 ms** |
+### Goal & Risk Gating Telemetry (`GOAL_UPDATE`)
+```json
+{
+  "type": "GOAL_UPDATE",
+  "payload": {
+    "current_month": "2026-09",
+    "crypto_trades_completed": 12,
+    "crypto_ceiling": 20,
+    "crypto_progress_pct": 60.0,
+    "stock_trades_completed": 35,
+    "stock_ceiling": 80,
+    "stock_progress_pct": 43.8,
+    "daily_loss_usd": 12.40,
+    "daily_loss_pct": 1.24,
+    "daily_loss_limit_pct": 4.0,
+    "daily_circuit_breaker_active": false,
+    "peak_monthly_equity": 1050.00,
+    "current_equity": 1024.50,
+    "monthly_drawdown_pct": 2.43,
+    "monthly_drawdown_limit_pct": 18.0,
+    "monthly_circuit_breaker_active": false,
+    "overall_win_rate_pct": 61.7,
+    "overall_profit_factor": 1.84
+  }
+}
+```

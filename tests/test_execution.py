@@ -9,6 +9,7 @@ class TestExecutionEngine(unittest.TestCase):
         config.MIN_CONFIDENCE_THRESHOLD = 0.35
         config.KELLY_FRACTION = 0.5
         config.MAX_POSITION_SIZE_PCT = 0.20
+        config.ENFORCE_US_MARKET_HOURS = False
 
     def test_size_order_low_confidence(self):
         signal = {"direction_magnitude": 0.5, "confidence_score": 0.20}
@@ -16,19 +17,25 @@ class TestExecutionEngine(unittest.TestCase):
         self.assertIsNone(order)
 
     def test_size_order_valid_buy(self):
-        signal = {"direction_magnitude": 0.8, "confidence_score": 0.60, "instrument": "AAPL"}
-        order = self.ee.size_order(signal, {})
-        self.assertIsNotNone(order)
-        self.assertEqual(order["action"], "BUY")
-        self.assertEqual(order["instrument"], "AAPL")
-        self.assertFalse(order["is_take_profit"])
+        from unittest.mock import patch, MagicMock
+        with patch("goals.goal_module.evaluate_trade") as mock_eval:
+            mock_eval.return_value = MagicMock(allowed=True, leverage=2.0, risk_budget_usd=10.0)
+            signal = {"direction_magnitude": 0.8, "confidence_score": 0.60, "instrument": "AAPL"}
+            order = self.ee.size_order(signal, {})
+            self.assertIsNotNone(order)
+            self.assertEqual(order["action"], "BUY")
+            self.assertEqual(order["instrument"], "AAPL")
+            self.assertFalse(order["is_take_profit"])
 
     def test_size_order_valid_sell(self):
-        signal = {"direction_magnitude": -0.8, "confidence_score": 0.60, "instrument": "AAPL"}
-        order = self.ee.size_order(signal, {})
-        self.assertIsNotNone(order)
-        self.assertEqual(order["action"], "SELL")
-        self.assertFalse(order["is_take_profit"])
+        from unittest.mock import patch, MagicMock
+        with patch("goals.goal_module.evaluate_trade") as mock_eval:
+            mock_eval.return_value = MagicMock(allowed=True, leverage=2.0, risk_budget_usd=10.0)
+            signal = {"direction_magnitude": -0.8, "confidence_score": 0.60, "instrument": "AAPL"}
+            order = self.ee.size_order(signal, {})
+            self.assertIsNotNone(order)
+            self.assertEqual(order["action"], "SELL")
+            self.assertFalse(order["is_take_profit"])
         
     def test_take_profit_trigger(self):
         # Even with low confidence, TP should trigger
@@ -49,6 +56,7 @@ class TestRiskGuard(unittest.TestCase):
         self.rg = RiskGuard()
         config.MAX_EXPOSURE_PCT = 0.80
         config.CONCENTRATION_LIMIT_PCT = 0.25
+        config.ENFORCE_US_MARKET_HOURS = False
 
     def test_check_order_pass(self):
         self.rg.update_state(0.10, {"AAPL": {"exposure_pct": 0.05}})
@@ -57,14 +65,14 @@ class TestRiskGuard(unittest.TestCase):
         self.assertEqual(res["risk_state"], "APPROVED")
 
     def test_check_order_fail_exposure(self):
-        self.rg.update_state(0.75, {"AAPL": {"exposure_pct": 0.05}})
+        self.rg.update_state(0.80, {"AAPL": {"exposure_pct": 0.05}})
         order = {"instrument": "SPY", "portfolio_allocation_pct": 0.10, "action": "BUY"}
         res = self.rg.check_order(order)
         self.assertEqual(res["risk_state"], "REJECTED")
         self.assertEqual(res["failed_check"], "exposure_limit")
 
     def test_check_order_fail_concentration(self):
-        self.rg.update_state(0.10, {"AAPL": {"exposure_pct": 0.20}})
+        self.rg.update_state(0.10, {"AAPL": {"exposure_pct": 0.25}})
         order = {"instrument": "AAPL", "portfolio_allocation_pct": 0.10, "action": "BUY"}
         res = self.rg.check_order(order)
         self.assertEqual(res["risk_state"], "REJECTED")

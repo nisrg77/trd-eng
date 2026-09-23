@@ -1,6 +1,6 @@
-Act as a Lead Quantitative Developer and Full-Stack FinTech Engineer. Your objective is to architect and generate the codebase for a high-frequency, machine-learning-driven algorithmic trading system.
+Act as a Lead Quantitative Developer and Full-Stack FinTech Engineer. Your objective is to architect and generate the codebase for a high-frequency, machine-learning-driven algorithmic trading system named TRDENG.
 
-Please reference the existing backend logic, data structures, and state definitions found in the file "Trade Engine " to ensure all data types and API contracts match exactly.
+Please reference the existing backend logic, data structures, and state definitions found in TRDENG engine modules (`goals/goal_module.py`, `data_pipeline/dead_day_filter.py`, `execution/engine.py`, `execution/simulated_oms.py`, `execution/market_session.py`) to ensure all data types and API contracts match exactly.
 
 **1. Machine Learning Pipeline & Data Engineering**
 Implement a robust pipeline resilient to non-stationary financial data, strictly avoiding overfitting and look-ahead bias.
@@ -10,39 +10,33 @@ Implement a robust pipeline resilient to non-stationary financial data, strictly
 $$w_k = -w_{k-1} \frac{d - k + 1}{k}$$
 
 * **Validation Protocol:** Implement Combinatorial Purged Cross-Validation (CPCV). Ensure the pipeline automatically purges training data points that overlap with the testing set timeframe, applying an embargo period after the test set to prevent information leakage.
-* **Regime Detection:** Integrate a Gaussian Hidden Markov Model (HMM) to classify live market states (e.g., mean-reverting, trending, high-volatility). The model must dynamically update the feature weights (L1/L2 regularization penalties) based on the active state matrix.
+* **Regime Detection & Dead-Day Filter:** Integrate a Gaussian Hidden Markov Model (HMM) to classify live market states. Integrate a Dead-Day Filter (`data_pipeline/dead_day_filter.py`) that detects non-tradable chop sessions (Range/ATR < 0.85, RVOL < 0.70, Realized Vol < 0.008) and collapses effective conviction to 0.0.
 
-**2. Risk Management & Position Sizing**
-Isolate the risk module from the prediction logic. The risk engine must have final authority over execution.
+**2. Risk Management, Position Sizing & Goal Gating**
+Isolate the risk module from the prediction logic. The risk engine and GoalModule must have final authority over execution.
 
-* **Optimal Allocation:** Calculate dynamic position sizing using the Kelly Criterion to maximize logarithmic wealth growth, adjusting for the asset's historical volatility:
+* **Goal & Risk Gating Module (`goals/goal_module.py`):** Enforce monthly ceilings (20 Crypto Perpetuals / 80 US Equities) and multi-horizon circuit breakers (4% daily loss hard stop, 18% monthly drawdown hard stop). Automatically throttle new order entries when ceilings or circuit breakers are hit.
+* **Dynamic Leverage Curve:** Calculate dynamic leverage continuously:
 
-$$f^* = \frac{p(b+1)-1}{b}$$
+$$\text{Leverage} = \text{MIN\_LEV} + (\text{MAX\_LEV} - \text{MIN\_LEV}) \times \text{effective\_conviction} \times \frac{1}{\max(1.0, \frac{\text{range\_atr\_ratio}}{1.2})}$$
 
-```
-*(Where \(p\) is the probability of a win, and \(b\) is the proportion of the bet gained with a win).*
+*(Crypto: 1x to 5x / US Equities: 1x to 10x).*
 
-```
-
-* **Circuit Breakers:** Hardcode global account stop-losses at a 3% daily drawdown and 10% monthly drawdown. If triggered, emit a global event to cancel all open limit orders and submit market orders to flatten active positions.
+* **Risk Budget Sizing:** Size US Equities trades based on a $10.00 Risk Budget per contract.
 
 **3. Dynamic Execution & Microstructure Logic**
-Optimize entries and exits using Limit Order Book (LOB) dynamics rather than static price targets.
+Optimize entries and exits using Limit Order Book (LOB) dynamics, Volume-at-Price (VAP), Cumulative Volume Delta (CVD), and Regular Trading Hours (RTH) session gating.
 
-* **Adaptive Exits:** Implement an ATR-based trailing stop for active positions. The stop distance must scale linearly with volatility.
+* **Adaptive Exits:** Implement an ATR-based trailing stop for active positions.
+* **Scaled Profit Taking & Structural Snapping:** Program a progressive exit manager. Dynamically snap take-profit orders to one tick inside Volume-at-Price structural boundaries (VAH, VAL, VPOC) if closer than statistical ATR targets (`TP1_VAP_SNAP`, `TP2_VAP_SNAP`).
+* **Market Session Gating (`execution/market_session.py`):** Enforce Regular Trading Hours (09:30–16:00 ET Mon–Fri) for US Equities while permitting 24/7/365 continuous trading for Crypto Perpetuals.
 
-$$Stop_{price} = Price_{entry} \pm (k \times ATR_n)$$
+**4. Stitch MCP Frontend Architecture (Institutional Dashboard UI/UX)**
+Build the presentation layer using the Stitch MCP UI design (`projects/15624410236763381846` — *"Quant Execution Trading Terminal"*):
 
-* **Scaled Profit Taking:** Program a progressive exit manager. Execute 40% position exits at $+1\sigma$ (Standard Deviation) of the expected move, 30% at $+2\sigma$, and leave 30% running on a tight order-flow exhaustion trigger.
-* **Microstructure Entries:** Analyze the LOB bid-ask imbalance ($\rho$). Delay algorithmic entry signals until local liquidity is sufficient and $\rho > 0.3$ (buy pressure) to minimize slippage. Route large allocations through a Time-Weighted Average Price (TWAP) execution function.
-
-**4. Frontend Architecture (Dashboard UI/UX)**
-Build the presentation layer to visualize the "Trade Engine " telemetry with zero latency.
-
-* **Tech Stack:** React (Next.js), Tailwind CSS, and shadcn/ui.
-* **Primary Visualization:** Implement `tradingview-lightweight-charts` within a responsive React wrapper. It must render historical OHLCV data and accept real-time candlestick updates without full DOM re-renders.
-* **State Management & Streaming:** Use `Zustand` to manage the live order book state, active positions, and PnL. Establish a WebSocket connection to stream tick-level updates directly from the backend to the charting component.
-* **Widgets:** Create modular components for (1) A depth chart / live LOB, (2) System log tables for order execution statuses, and (3) Recharts-based equity curve visualizations.
-
-Provide the optimal directory structure, the core Python classes for the ML validation/risk modules, and the Next.js React components for the real-time charting interface.
+* **Tech Stack:** Next.js (App Router), Tailwind CSS, Zustand, and WebSockets.
+* **Views:**
+  1. `/crypto`: 24/7 Funding Heatmap, Liquidation Proximity, VPOC/CVD Microstructure, L2 DOM Depth, Active Crypto Positions.
+  2. `/us-futures`: RTH Session Status Banner, 7-Day Screener Top Candidate Pool (Long/Short), Single Stock Futures Metrics, Active Stock Positions.
+  3. `/trade-logs`: Ceilings Progress, 4% Daily / 18% Monthly Circuit Breaker Telemetry, Asset-Filtered Audit Logs.
 

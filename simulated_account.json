@@ -1,30 +1,9 @@
 {
-  "equity": 1000.0,
-  "realized_pl": 0.0,
-  "positions": {
-    "BTC-USD": {
-      "qty": 0.04655493482309125,
-      "entry_price": 85920.0,
-      "current_price": 86004.39,
-      "atr_trailing_stop": 84201.6,
-      "unrealized_pl": 3.928770949720643,
-      "unrealized_plpc": 0.0009821927374301608
-    },
-    "AAPL": {
-      "qty": 11.799410029498524,
-      "entry_price": 339.0,
-      "current_price": 339.0,
-      "atr_trailing_stop": 332.22,
-      "unrealized_pl": 0.0,
-      "unrealized_plpc": 0.0
-    },
-    "SPY": {
-      "qty": 5.171165580721895,
-      "entry_price": 773.52,
-      "current_price": 773.52,
-      "atr_trailing_stop": 758.0495999999999,
-      "unrealized_pl": 0.0,
-      "unrealized_plpc": 0.0
-    }
-  }
+  "equity": -413.6,
+  "balance": -413.6,
+  "realized_pl": -1413.6,
+  "positions": {},
+  "unrealized_pl": 0,
+  "total_pl": -1413.6,
+  "reset_time_ist": "2026-09-23T16:17:00+05:30"
 }

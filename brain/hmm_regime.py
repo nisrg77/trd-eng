@@ -23,6 +23,9 @@ class GaussianHMMRegimeDetector:
       State 2: High Volatility / Crisis
     """
 
+    VOL_THRESHOLD_US_FUTURES: float = 0.015  # 1.5% GARCH-vol threshold for US Stock Futures
+    VOL_THRESHOLD_CRYPTO: float = 0.040      # 4.0% GARCH-vol threshold for Crypto Perpetuals
+
     def __init__(self, n_components: int = 3) -> None:
         self.n_components = n_components
         self.transition_matrix = np.array([
@@ -51,8 +54,8 @@ class GaussianHMMRegimeDetector:
         -------
         dict with keys: regime_flag, probabilities, penalty_weights
         """
-        # Asset-calibrated volatility scale threshold
-        vol_threshold = 0.040 if is_crypto else 0.015
+        # Asset-calibrated volatility scale threshold: 1.5% US Futures vs 4.0% Crypto
+        vol_threshold = self.VOL_THRESHOLD_CRYPTO if is_crypto else self.VOL_THRESHOLD_US_FUTURES
         scaled_vol = garch_vol / vol_threshold
 
         trend_score = abs(rsi_14 - 50.0) / 50.0

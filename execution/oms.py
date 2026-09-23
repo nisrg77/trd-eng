@@ -110,6 +110,14 @@ class AlpacaOMS:
             evaluated_order["oms_detail"] = "Paper trading is disabled in config."
             evaluated_order["alpaca_order_id"] = "simulated_order_" + str(uuid.uuid4())[:8]
             return evaluated_order
+
+        # Market Session Check
+        from execution.market_session import is_market_session_open
+        is_open, session_reason, _ = is_market_session_open(evaluated_order.get("instrument", ""))
+        if not is_open and not evaluated_order.get("is_take_profit"):
+            evaluated_order["oms_state"] = "REJECTED_MARKET_CLOSED"
+            evaluated_order["oms_detail"] = session_reason
+            return evaluated_order
             
         account = self.get_account_state()
         equity = account["equity"]
@@ -134,6 +142,14 @@ class AlpacaOMS:
             "client_order_id": evaluated_order["order_id"][:48] # Max 48 chars
         }
         
+        now_ts = time.time()
+        qty_est = (notional_value / current_price) if current_price > 0 else 1.0
+        evaluated_order["timestamp_executed"] = now_ts
+        evaluated_order["price"] = current_price
+        evaluated_order["qty"] = round(qty_est if side == "buy" else -qty_est, 4)
+        evaluated_order["quantity"] = round(abs(qty_est), 4)
+        evaluated_order["realized_pnl"] = 0.0
+
         url = f"{self.base_url}/orders"
         try:
             resp = requests.post(url, headers=self.headers, json=payload, timeout=10)

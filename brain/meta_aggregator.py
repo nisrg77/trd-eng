@@ -32,14 +32,16 @@ import config
 log = logging.getLogger(__name__)
 
 
-def _detect_regime(garch_vol: float) -> str:
+def _detect_regime(garch_vol: float, trend_metric: float = 0.0) -> str:
     """
-    Classify current market regime based on the latest GARCH-proxy volatility.
+    Classify current market regime based on GARCH-proxy volatility and directional drift.
     """
     if garch_vol > config.REGIME_VOL_THRESHOLD_HIGH:
         return "high_volatility"
     elif garch_vol < config.REGIME_VOL_THRESHOLD_LOW:
         return "low_volatility"
+    elif trend_metric > 0.005:
+        return "trending_up"
     else:
         return "trending"
 
@@ -62,6 +64,9 @@ class MetaAggregator:
         xgb_signal: float,
         lstm_signal: float,
         garch_vol: float,
+        trend_metric: float = 0.0,
+        instrument: str = "",
+        obi_rho: float = 0.0,
     ) -> dict:
         """
         Parameters
@@ -70,13 +75,17 @@ class MetaAggregator:
         xgb_signal   : float ∈ [-1, +1]
         lstm_signal  : float ∈ [-1, +1]
         garch_vol    : float  (latest annualised vol from DP payload)
+        trend_metric : float  (optional directional trend/drift score)
+        instrument   : str    (optional instrument identifier)
+        obi_rho      : float  (optional order book imbalance)
 
         Returns
         -------
         dict with keys: blended_signal, regime_flag, per_model, weights_used
+        (S_composite is untouched at this stage; IFF gate is applied downstream)
         """
-        regime = _detect_regime(garch_vol)
-        weights = self.weight_table.get(regime, self.weight_table["trending"])
+        regime = _detect_regime(garch_vol, trend_metric)
+        weights = self.weight_table.get(regime, self.weight_table.get("trending", {"ridge": 0.34, "xgb": 0.33, "lstm": 0.33}))
 
         blended = (
             weights["ridge"] * ridge_signal
@@ -98,10 +107,7 @@ class MetaAggregator:
 
         log.debug(
             "MA  regime=%-18s  ridge=%.3f  xgb=%.3f  lstm=%.3f  blended=%.3f",
-            regime,
-            ridge_signal,
-            xgb_signal,
-            lstm_signal,
-            blended,
+            regime, ridge_signal, xgb_signal, lstm_signal, blended,
         )
         return result
+

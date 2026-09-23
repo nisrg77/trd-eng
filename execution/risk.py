@@ -24,17 +24,60 @@ class RiskGuard:
         self.daily_start_equity = 1000.0
         self.monthly_start_equity = 1000.0
         self.circuit_breaker_active = False
+        self.trailing_win_rate = 0.55
+        self.trailing_payoff_ratio = 1.50
+        self.recalibration_window = 50
 
     def update_state(self, current_exposure: float, instrument_exposures: dict[str, dict | float], current_equity: float = 1000.0):
         """Syncs internal state with live portfolio state."""
         self.current_exposure_pct = current_exposure
         self.exposure_by_instrument = instrument_exposures
 
-    def calculate_kelly_size(self, win_probability: float, win_loss_ratio: float = 1.5) -> float:
+    def recalibrate_kelly_parameters(self, trades_history: list = None) -> tuple[float, float]:
         """
-        Kelly Criterion Formula:
-            f* = (p * (b + 1) - 1) / b
+        Continuously recalibrates trailing win rate (p_hat) and payoff ratio (b_hat)
+        over the last W=50 trades using Laplace smoothing to avoid static over-leveraging.
         """
+        if trades_history is None:
+            exec_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "execution_store.json")
+            if os.path.exists(exec_file):
+                try:
+                    with open(exec_file, "r") as f:
+                        trades_history = json.load(f)
+                except Exception:
+                    trades_history = []
+            else:
+                trades_history = []
+
+        closed_trades = [t for t in trades_history if isinstance(t, dict) and "realized_pnl" in t][-self.recalibration_window:]
+        if not closed_trades:
+            return self.trailing_win_rate, self.trailing_payoff_ratio
+
+        wins = [t["realized_pnl"] for t in closed_trades if t.get("realized_pnl", 0) > 0]
+        losses = [abs(t["realized_pnl"]) for t in closed_trades if t.get("realized_pnl", 0) < 0]
+
+        # Laplace smoothing (Uniform Beta(1,1) prior)
+        n_wins = len(wins)
+        n_total = len(closed_trades)
+        p_hat = (n_wins + 1.0) / (n_total + 2.0)
+
+        # Dynamic Payoff Ratio
+        avg_win = (sum(wins) / n_wins) if n_wins > 0 else 1.5
+        avg_loss = (sum(losses) / len(losses)) if losses else 1.0
+        b_hat = max(0.5, min(4.0, avg_win / max(0.01, avg_loss)))
+
+        self.trailing_win_rate = round(p_hat, 4)
+        self.trailing_payoff_ratio = round(b_hat, 4)
+        return self.trailing_win_rate, self.trailing_payoff_ratio
+
+    def calculate_kelly_size(self, win_probability: float = 0.5, win_loss_ratio: float = None) -> float:
+        """
+        Kelly Criterion Formula with Dynamic Trailing Recalibration:
+            f* = 0.5 * [ (p * (b + 1) - 1) / b ]
+        """
+        if win_loss_ratio is None:
+            win_loss_ratio = self.trailing_payoff_ratio
+
         p = min(max(win_probability, 0.01), 0.99)
         b = max(win_loss_ratio, 0.1)
         f_star = (p * (b + 1.0) - 1.0) / b
@@ -85,27 +128,60 @@ class RiskGuard:
 
         instr_data = self.exposure_by_instrument.get(instrument, {})
         current_instr_exposure = instr_data.get("exposure_pct", 0.0) if isinstance(instr_data, dict) else (instr_data or 0.0)
+        existing_side = instr_data.get("side") if isinstance(instr_data, dict) else ("LONG" if current_instr_exposure > 0 else None)
         
-        # Exposure reduction always APPROVED
-        if current_instr_exposure > 0 and action == "SELL":
+        # Exposure reduction always APPROVED:
+        # A SELL reduces exposure if the existing position is LONG.
+        # A BUY reduces exposure if the existing position is SHORT.
+        is_reducing = (
+            (existing_side == "LONG" and action == "SELL") or
+            (existing_side == "SHORT" and action == "BUY")
+        )
+        if is_reducing:
             evaluated_order["risk_state"] = "APPROVED"
             evaluated_order["checks_passed"] = ["reducing_exposure_auto_approve"]
             evaluated_order["portfolio_allocation_pct"] = alloc_pct
             return evaluated_order
 
-        # Auto-trim allocation if it exceeds remaining capacity
-        max_allowed_by_global = max(0.0, profile["MAX_EXPOSURE_PCT"] - self.current_exposure_pct)
-        max_allowed_by_instr = max(0.0, profile["CONCENTRATION_LIMIT_PCT"] - current_instr_exposure)
-        
-        allowed_alloc = min(alloc_pct, max_allowed_by_global, max_allowed_by_instr)
-
-        if allowed_alloc < 0.02:
+        # Market Session Check (for new entries & exposure-increasing orders)
+        from execution.market_session import is_market_session_open
+        is_open, session_reason, _ = is_market_session_open(instrument)
+        if not is_open:
             evaluated_order["risk_state"] = "REJECTED"
-            evaluated_order["failed_check"] = "exposure_limit"
-            evaluated_order["detail"] = f"Remaining exposure room ({allowed_alloc:.2%}) < 2.0% minimum threshold."
-        else:
-            evaluated_order["risk_state"] = "APPROVED"
-            evaluated_order["checks_passed"] = ["exposure_ok", "concentration_ok"]
-            evaluated_order["portfolio_allocation_pct"] = round(allowed_alloc, 4)
+            evaluated_order["failed_check"] = "market_session_closed"
+            evaluated_order["detail"] = session_reason
+            return evaluated_order
+
+        # Auto-trim allocation if it exceeds remaining capacity
+        max_exposure = getattr(config, "MAX_EXPOSURE_PCT", profile.get("MAX_EXPOSURE_PCT", 0.80))
+        conc_limit = getattr(config, "CONCENTRATION_LIMIT_PCT", profile.get("CONCENTRATION_LIMIT_PCT", 0.25))
+
+        remaining_exposure = max(0.0, max_exposure - self.current_exposure_pct)
+        if alloc_pct > remaining_exposure + 1e-6:
+            if remaining_exposure >= 0.01:
+                alloc_pct = round(remaining_exposure, 4)
+                evaluated_order["auto_trimmed"] = True
+                evaluated_order["trim_reason"] = "portfolio_exposure_limit"
+            else:
+                evaluated_order["risk_state"] = "REJECTED"
+                evaluated_order["failed_check"] = "exposure_limit"
+                evaluated_order["detail"] = f"Remaining exposure room ({remaining_exposure:.2%}) < requested minimum (1%)."
+                return evaluated_order
+
+        remaining_conc = max(0.0, conc_limit - current_instr_exposure)
+        if alloc_pct > remaining_conc + 1e-6:
+            if remaining_conc >= 0.01:
+                alloc_pct = round(remaining_conc, 4)
+                evaluated_order["auto_trimmed"] = True
+                evaluated_order["trim_reason"] = "concentration_limit"
+            else:
+                evaluated_order["risk_state"] = "REJECTED"
+                evaluated_order["failed_check"] = "concentration_limit"
+                evaluated_order["detail"] = f"Concentration limit exceeded for {instrument} ({current_instr_exposure:.2%} > {conc_limit:.2%})."
+                return evaluated_order
+
+        evaluated_order["risk_state"] = "APPROVED"
+        evaluated_order["checks_passed"] = ["exposure_ok", "concentration_ok"]
+        evaluated_order["portfolio_allocation_pct"] = round(alloc_pct, 4)
 
         return evaluated_order

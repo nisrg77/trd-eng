@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { ClientAppWrapper } from '@/components/ClientAppWrapper';
 
 export const metadata: Metadata = {
-  title: 'TEDENG | High-Performance FinTech Algorithmic Trading Dashboard',
-  description: 'Real-time ML Algorithmic Trading Engine Dashboard with TradingView Lightweight Charts & WebSockets',
+  title: 'TRDENG | Quant Execution Trading Terminal',
+  description: 'High-Throughput Institutional Quant Execution Engine Dashboard & Real-Time Telemetry',
 };
 
 export default function RootLayout({
@@ -13,8 +14,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className="bg-[#05080f] text-slate-100 antialiased selection:bg-cyan-500/30">
-        {children}
+      <body className="bg-surface font-body-md text-on-surface antialiased">
+        <ClientAppWrapper>{children}</ClientAppWrapper>
       </body>
     </html>
   );

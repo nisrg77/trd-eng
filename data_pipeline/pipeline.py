@@ -146,7 +146,9 @@ def _build_payload(df: pd.DataFrame, instrument: str) -> dict:
             "obi":       obi.tolist(),
             "rsi_14":    rsi.tolist(),
         },
+        "_df": df,
     }
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

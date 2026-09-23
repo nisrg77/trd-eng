@@ -97,9 +97,22 @@ class CoreBrain:
         xgb_sig   = xgb.predict(x_latest)
         lstm_sig  = lstm.predict(X)
 
-        # ── MA: regime-weighted blend ──────────────────────────────────────
+        # ── MA: regime-weighted blend (untouched S_composite) ───────────────
         garch_vol = payload["features"].get("garch_vol", 0.01)
         aggregation = self.ma.aggregate(ridge_sig, xgb_sig, lstm_sig, garch_vol)
+
+        # ── IFF Gate: institutional flow veto & scale applied right after MA ──
+        obi_rho = payload["features"].get("order_book_imbalance", 0.0)
+        try:
+            from alpha_overlay.iff import apply_iff_gate
+            gated_signal, flow_score, iff_veto = apply_iff_gate(
+                aggregation["blended_signal"], instrument, obi_rho
+            )
+            aggregation["blended_signal"] = gated_signal
+            aggregation["flow_score"] = flow_score
+            aggregation["iff_veto"] = iff_veto
+        except Exception as e:
+            log.warning("IFF gate unavailable in run_brain: %s", e)
 
         # ── SS: canonical signal packet ────────────────────────────────────
         signal = self.ss.standardize(instrument, aggregation, payload, t_start)

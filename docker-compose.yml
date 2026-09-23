@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # The FastAPI WebSocket Server (Port 8000)
+  ws-server:
+    build: .
+    container_name: trdeng-ws-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    command: ["python", "services/ws_server.py"]
+    depends_on:
+      - redis
+
+  # Next.js Frontend (Port 3000)
+  frontend:
+    build: ./frontend
+    container_name: trdeng-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+
+  # The Execution Backend / Orchestrator
+  backend-engine:
+    build: .
+    container_name: trdeng-backend-engine
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["python", "services/run_backend.py"]
+    depends_on:
+      - redis
+
+  # Redis (Optional but recommended for messaging/state)
+  redis:
+    image: redis:7-alpine
+    container_name: trdeng-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"

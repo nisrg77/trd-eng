@@ -17,6 +17,17 @@ interface TradingStoreState {
   equityCurve: { time: string; equity: number; pnl: number }[];
   quotaState: any;
   screenerTargets: any;
+  marketSession: any;
+  goalSummary: any;
+  microstructure: {
+    symbol: string;
+    vpoc_price: number | null;
+    vah: number | null;
+    val: number | null;
+    cvd_trend: number;
+    flow_score: number;
+    iff_available: boolean;
+  };
 
   setSelectedSymbol: (symbol: Instrument) => void;
   setConnectionStatus: (status: TradingStoreState['connectionStatus']) => void;
@@ -29,6 +40,9 @@ interface TradingStoreState {
   addLog: (log: SystemLog) => void;
   updateQuotaState: (quota: any) => void;
   updateScreenerTargets: (targets: any) => void;
+  updateMicrostructure: (data: any) => void;
+  updateMarketSession: (session: any) => void;
+  updateGoalSummary: (goal: any) => void;
 }
 
 export const useTradingStore = create<TradingStoreState>((set) => ({
@@ -71,11 +85,44 @@ export const useTradingStore = create<TradingStoreState>((set) => ({
     futures: { completed: 0, wins: 0, losses: 0, win_pnl: 0.0, loss_pnl: 0.0 }
   },
   screenerTargets: { long: 'PENDING', short: 'PENDING' },
+  marketSession: {
+    us: { is_open: false, session_name: 'CLOSED', rth_hours: '09:30 - 16:00 ET' },
+    crypto: { is_open: true, session_name: '24/7', rth_hours: '24/7/365' },
+    current_symbol: null
+  },
+  goalSummary: {
+    monthly_target_usd: 100.0,
+    monthly_pnl_usd: 0.0,
+    monthly_pnl_pct: 0.0,
+    crypto_trades_used: "0/20",
+    stock_trades_used: "0/80",
+    crypto_completed: 0,
+    crypto_ceiling: 20,
+    stock_completed: 0,
+    stock_ceiling: 80,
+    equity_current_usd: 1000.0,
+    equity_peak_usd: 1000.0,
+    current_drawdown_pct: 0.0,
+    engine_paused: false,
+    pause_reason: null
+  },
+  microstructure: {
+    symbol: '',
+    vpoc_price: null,
+    vah: null,
+    val: null,
+    cvd_trend: 0,
+    flow_score: 0,
+    iff_available: false,
+  },
 
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol, historicalCandles: [] }),
   setConnectionStatus: (status) => set({ connectionStatus: status }),
   updateQuotaState: (quota) => set({ quotaState: quota }),
   updateScreenerTargets: (targets) => set({ screenerTargets: targets }),
+  updateMicrostructure: (data) => set({ microstructure: data }),
+  updateMarketSession: (session) => set({ marketSession: session }),
+  updateGoalSummary: (goal) => set({ goalSummary: goal }),
 
   updateTick: (tick) =>
     set((state) => {

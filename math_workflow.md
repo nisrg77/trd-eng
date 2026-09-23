@@ -1,0 +1,37 @@
+# TRDENG — Quantitative Math & Logic Workflow Diagram
+
+```mermaid
+flowchart TD
+    Data["Market Data Feeds: yfinance REST + Binance aggTrade WS"] --> AssetSplit{Asset Class?}
+
+    AssetSplit -- US Stock Futures --> US_FD["Session-Aware FracDiff (Pause decay on 48h gaps)"]
+    AssetSplit -- Crypto Perpetuals --> CR_FD["Continuous 24/7 FracDiff + aggTrade Tick Stream"]
+
+    CR_FD --> Micro["vap_cvd.py: 500-Bin VAP VPOC/VAH/VAL & CVD Divergence"]
+    US_FD --> US_HMM["US Futures HMM Model (1.5% Vol Threshold)"]
+    CR_FD --> CR_HMM["Crypto HMM Model (4.0% Vol Threshold)"]
+
+    US_HMM & CR_HMM --> MetaAgg["Meta-Aggregator: Blended S_composite (Ridge + XGB + LSTM)"]
+    Micro & Data --> IFF["alpha_overlay/iff.py: Compute Flow Score S_flow (COT + CVD + OBI)"]
+
+    MetaAgg & IFF --> IFFGate{"Opposing Flow & abs(S_flow) > 0.5?"}
+    IFFGate -- YES (Conflict) --> VETO["VETO SIGNAL: Set S_composite = 0 (Execution Dropped)"]
+    IFFGate -- NO (Aligned) --> Scale["Scale S_composite by (1 + 0.5*S_flow)"]
+
+    Scale --> MicroBuffer["Micro-Buffer: Non-Blocking 5ms Polling Hold Window"]
+    MicroBuffer --> StateReg["SymbolStateRegistry: Thread-Safe State Store"]
+
+    StateReg --> DeadDay{"Dead-Day Filter: Chop Session?"}
+    DeadDay -- YES (Range/ATR < 0.85) --> ZERO_CONV["Effective Conviction = 0.0 (No Trade)"]
+    DeadDay -- NO --> DynLev["Compute Dynamic Leverage (1x to 5x Crypto / 1x to 10x Stocks) with Stretch Penalty"]
+
+    DynLev --> GoalGate{Goal & Risk Gating Check}
+
+    GoalGate -- Ceiling Reached (20 Crypto / 80 Stocks) --> BLOCK_CEIL["Auto-Throttle Entry: Monthly Target Met"]
+    GoalGate -- Daily Loss >= 4.0% --> BLOCK_DAILY["Daily Circuit Breaker Tripped (Resets Next Day)"]
+    GoalGate -- Monthly Drawdown >= 18.0% --> BLOCK_MONTHLY["Monthly Circuit Breaker Tripped (Halt)"]
+
+    GoalGate -- PASS (All Clear) --> OMS["Execute OMS: Dynamic Leverage + Risk Budget Sizing + VPOC TP Snapping"]
+    OMS --> EE["ExecutionEngine Pipeline"]
+    EE --> Trace["DecisionTrace Logging to decision_trace.jsonl"]
+```

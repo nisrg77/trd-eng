@@ -1,34 +1,47 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=JetBrains+Mono:wght@100..900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #05080f;
-  --foreground: #f8fafc;
+@layer base {
+  html, body {
+    margin: 0;
+    padding: 0;
+    background-color: #0d131f;
+    color: #dde2f4;
+    font-family: 'Geist', sans-serif;
+  }
+  body {
+    overscroll-behavior: none;
+  }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: 'Inter', sans-serif;
-  overflow-x: hidden;
-}
-
-/* Custom Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  display: none;
 }
 
-::-webkit-scrollbar-track {
-  background: #090d16;
+/* Tabular lining figures for numbers */
+.font-numeric-sm, .font-numeric-md, .font-numeric-lg, .font-label-xs, .font-label-md {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
 }
 
-::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 3px;
+.needle-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #ffb4ab, #3b4a41, #00f0a8);
+  position: relative;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+.needle {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 18px;
+  background: #dde2f4;
+  border-radius: 1px;
+  transition: left 0.5s ease;
 }

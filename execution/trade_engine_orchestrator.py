@@ -113,12 +113,13 @@ class TradeEngineOrchestrator:
         is_crypto = instrument in config.CRYPTO_INSTRUMENTS
         asset_class = "crypto" if is_crypto else "futures"
         
-        # Enforce RTH constraint for US Futures
-        if not is_crypto and not self._is_rth():
-            # Still update OMS prices so trailing stops can be managed if we held anything overnight,
-            # though CME closes entirely on weekends.
+        # Enforce Market Session constraint for US Futures & Equities
+        from execution.market_session import is_market_session_open
+        is_open, session_msg, _ = is_market_session_open(instrument)
+        if not is_open:
+            # Still update OMS prices so trailing stops can be managed if positions are held
             self.oms.update_prices({instrument: current_price}, {instrument: atr_proxy})
-            return # Skip entry logic outside RTH
+            return # Skip entry logic outside active session
             
         # 1. Update OMS Prices & Handle Scaled Exits / Trailing Stops
         exits = self.oms.update_prices({instrument: current_price}, {instrument: atr_proxy})

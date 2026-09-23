@@ -107,6 +107,11 @@ class SignalStandardizer:
             "ohlcv":               feature_payload.get("ohlcv", {}),
         }
 
+        if "flow_score" in aggregation:
+            packet["flow_score"] = aggregation["flow_score"]
+        if "iff_veto" in aggregation:
+            packet["iff_veto"] = aggregation["iff_veto"]
+
         log.info(
             "SS  [%s]  signal=%s  dir=%.4f  conf=%.3f  regime=%s  latency=%.1fms",
             instrument,

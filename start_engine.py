@@ -1,5 +1,5 @@
 """
-start_engine.py — TEDENG Master Deployment Initializer
+start_engine.py — TRDENG Master Deployment Initializer
 
 Use this script to deploy the engine in full-autonomous mode.
 - Sets initial capital based on config.py / .env
@@ -27,7 +27,7 @@ def clear_file(filename: str, default_content):
 
 def deploy():
     log.info("="*60)
-    log.info("TEDENG MASTER DEPLOYMENT INITIALIZER")
+    log.info("TRDENG MASTER DEPLOYMENT INITIALIZER")
     log.info("="*60)
     
     # 1. Initialize Simulated Account
@@ -43,12 +43,9 @@ def deploy():
     clear_file("simulated_account.json", account_state)
     log.info(f"Simulated Account Initialized: ${initial_cap:.2f} Capital (Max Leverage: {leverage}x)")
     
-    # 2. Reset Quota State
-    quota_state = {
-        "crypto": {"completed": 0, "wins": 0, "losses": 0, "win_pnl": 0.0, "loss_pnl": 0.0},
-        "futures": {"completed": 0, "wins": 0, "losses": 0, "win_pnl": 0.0, "loss_pnl": 0.0}
-    }
-    clear_file("quota_state.json", quota_state)
+    # 2. Reset Quota & Goal State
+    from goals.goal_module import GoalModule
+    clear_file("quota_state.json", GoalModule.INITIAL_STATE.copy())
     
     # 3. Reset Stores
     clear_file("execution_store.json", [])
@@ -65,7 +62,7 @@ def deploy():
         log.error(f"Failed to start PM2: {e}")
         log.warning("Please ensure PM2 is installed: `npm install -g pm2`")
         
-    log.info("Deployment Complete. TEDENG is now running autonomously.")
+    log.info("Deployment Complete. TRDENG is now running autonomously.")
     log.info("Results will automatically export to baseline_results.csv when quota is met.")
     log.info("="*60)
 

@@ -1,0 +1,543 @@
+================================================================================
+           TRDENG QUANTITATIVE ENGINE — MATHEMATICAL ARCHITECTURE SPEC
+                            FOR US STOCKS & FUTURES
+================================================================================
+
+TABLE OF CONTENTS
+1. Data Pipeline & Alpha Feature Math
+   1.1 Fractional Differentiation (Memory Preservation)
+   1.2 Microstructure Order Book Imbalance (OBI)
+   1.3 GARCH(1,1) Volatility Proxy
+   1.4 Relative Strength Index (RSI Wilder)
+   1.5 Rolling Z-Score Normalization
+   1.6 Incremental Volume-at-Price (VAP) Histogram & Value Area (VPOC, VAH, VAL)
+   1.7 Cumulative Volume Delta (CVD) & Order Absorption Divergence
+2. 7-Day Screener & Cross-Sectional Ranking Math
+   2.1 Relative Volume (RVOL)
+   2.2 Normalized Cross-Sectional Momentum
+   2.3 Combined Alpha Ranking Score
+3. ML Ensemble & Meta-Aggregation
+   3.1 Ridge Regularized Prediction
+   3.2 XGBoost Gradient Boosting
+   3.3 LSTM Sequential Memory Unit
+   3.4 Regime-Adaptive Dynamic Weights
+   3.5 Real-Time Regime Classification Trigger (GARCH + HMM)
+   3.6 Institutional Footprint & Flow (IFF) Composite Flow Score & Veto/Scale Gate
+4. Sizing & Execution Math (US Equities & Futures)
+   4.1 $100 Risk-Capped Contract Sizing
+   4.2 Dynamic Half-Kelly Trailing Recalibration & IFF Multiplier
+   4.3 Dynamic ATR Trailing Stops, VPOC/VAH/VAL Snapping & Profit Targets
+   4.4 Friction, Slippage & Microstructure Execution Models
+5. Portfolio Risk Guard & Limit Math
+   5.1 Long & Short Unrealized PnL Formulas
+   5.2 Instrument Concentration & Portfolio Exposure Limits
+   5.3 Daily Drawdown & Circuit Breaker Logic
+6. Backend Accounting, P/L, Leverage & Margin Mathematics
+   6.1 Cash Balance & Realized P/L Recurrence
+   6.2 Mark-to-Market Unrealized P/L Calculation
+   6.3 Total Net Account Equity (Net Liquidation Value / NLV)
+   6.4 Total Cumulative P/L & Total Return Percentage
+   6.5 Notional Value, Margin Requirements & Leverage Math
+   6.6 Margin Level % (Account Health Factor)
+   6.7 Isolated Position Liquidation Price
+
+================================================================================
+1. DATA PIPELINE & ALPHA FEATURE MATH
+================================================================================
+
+1.1 FRACTIONAL DIFFERENTIATION (Preserves memory while achieving stationarity)
+    Binomial expansion of the difference operator (1 - L)^d:
+
+    (1 - L)^d = sum_{k=0}^{infinity} (-1)^k * C(d, k) * L^k
+              = 1 - d*L + [d*(d-1)/2!]*L^2 - [d*(d-1)*(d-2)/3!]*L^3 + ...
+
+    Iterative weight recurrence:
+        w_0 = 1.0
+        w_k = -w_{k-1} * (d - k + 1) / k      for k = 1, 2, ..., N_window
+
+    Memory Feature:
+        X_tilde(t) = sum_{k=0}^{N} w_k * Price(t - k)
+        (where d = 0.40 provides stationarity with maximum ADF significance)
+
+1.2 MICROSTRUCTURE ORDER BOOK IMBALANCE (OBI)
+    Normalized volume ratio at Top-of-Book / Level 2:
+
+        rho(t) = [ Volume_Bid(t) - Volume_Ask(t) ] / [ Volume_Bid(t) + Volume_Ask(t) ]
+        
+        Range: rho in [-1.0, +1.0]
+        - rho > +0.20 : Strong buy-side depth pressure (Gating filter for BUY orders)
+        - rho < -0.20 : Strong sell-side depth pressure (Gating filter for SELL orders)
+
+1.3 GARCH(1,1) CONDITIONAL VOLATILITY PROXY
+    Estimates instantaneous volatility sigma_t:
+
+        sigma_t^2 = omega + alpha * epsilon_{t-1}^2 + beta * sigma_{t-1}^2
+        
+        where:
+            epsilon_{t-1} = log(Close_t / Close_{t-1})   (log return)
+            Constraint: alpha + beta < 1.0 (mean reverting process)
+            Typical US equity calibration: omega = 0.00001, alpha = 0.08, beta = 0.90
+
+1.4 RELATIVE STRENGTH INDEX (RSI Wilder Smoothing)
+    Calculates 14-period momentum:
+
+        Up(t)   = max(0, Close_t - Close_{t-1})
+        Down(t) = max(0, Close_{t-1} - Close_t)
+
+        Smoothed_Up(t)   = (13 * Smoothed_Up(t-1) + Up(t)) / 14
+        Smoothed_Down(t) = (13 * Smoothed_Down(t-1) + Down(t)) / 14
+
+        RS(t)  = Smoothed_Up(t) / Smoothed_Down(t)
+        RSI(t) = 100 - [ 100 / (1 + RS(t)) ]
+
+1.5 ROLLING Z-SCORE NORMALIZATION
+    Normalizes feature values into a standard normal distribution N(0, 1):
+
+        Z(t) = [ X(t) - mu_{window}(t) ] / [ sigma_{window}(t) + epsilon ]
+        where:
+            mu_{window}(t)    = (1 / N) * sum_{i=0}^{N-1} X(t - i)
+            sigma_{window}(t) = sqrt( (1 / N) * sum_{i=0}^{N-1} (X(t - i) - mu)^2 )
+            Clipped: Z(t) in [-3.0, +3.0]
+
+1.6 INCREMENTAL VOLUME-AT-PRICE (VAP) HISTOGRAM & VALUE AREA (VPOC, VAH, VAL)
+    Maintains a rolling 500-bin price-volume distribution updated incrementally per tick:
+
+    1. Price Discretization into Bins:
+        bin_idx = floor( [ Price - P_min ] / bin_size )
+        where:
+            bin_size = (P_max - P_min) / N_bins   (N_bins = 500)
+            V(bin_idx) = V(bin_idx) + Trade_Volume
+
+    2. Volume Point of Control (VPOC):
+        P_VPOC = Price( argmax_{k} V(k) )   (Bin with maximum accumulated volume)
+
+    3. Value Area Walk (70% Total Volume Distribution):
+        Starting at k_vpoc, iteratively accumulate volume in adjacent bins above and below:
+        Target_Vol = 0.70 * sum_{k=0}^{N-1} V(k)
+        Step: At each step, compare V(k_upper + 1) vs V(k_lower - 1), include the larger bin:
+            If V(k_upper + 1) >= V(k_lower - 1): expand upper bound
+            Else: expand lower bound
+        Upon reaching Target_Vol:
+            VAH (Value Area High) = Price(k_upper)
+            VAL (Value Area Low)  = Price(k_lower)
+
+1.7 CUMULATIVE VOLUME DELTA (CVD) & ORDER ABSORPTION DIVERGENCE
+    Aggregates aggressive market taker order flow:
+
+    1. Tick Order-Side Classification (Binance aggTrade / LOB Tape):
+        Delta_V(t) = +Volume(t)   if buyer is taker (Aggressive Buy, maker=False)
+        Delta_V(t) = -Volume(t)   if seller is taker (Aggressive Sell, maker=True)
+
+    2. Cumulative Volume Delta:
+        CVD(t) = CVD(t - 1) + Delta_V(t)
+
+    3. Absorption Divergence Detection (Rolling Window W = 100 ticks):
+        - Bullish Absorption (+1.0):
+            Price(t) <= min_{k in [t-W, t-1]} Price(k)   (Price makes Lower Low)
+            AND CVD(t) > min_{k in [t-W, t-1]} CVD(k)    (CVD makes Higher Low)
+            (Aggressive sellers absorbed by passive limit orders)
+        - Bearish Absorption (-1.0):
+            Price(t) >= max_{k in [t-W, t-1]} Price(k)   (Price makes Higher High)
+            AND CVD(t) < max_{k in [t-W, t-1]} CVD(k)    (CVD makes Lower High)
+            (Aggressive buyers absorbed by passive limit orders)
+        - Neutral (0.0):
+            No divergence confirmed.
+
+================================================================================
+2. 7-DAY SCREENER & CROSS-SECTIONAL RANKING MATH
+================================================================================
+
+2.1 RELATIVE VOLUME (RVOL)
+    Filters liquidity anomalies compared to 20-day trailing baseline:
+
+        RVOL_i = Volume_{i, today} / [ (1 / 20) * sum_{k=1}^{20} Volume_{i, t-k} ]
+
+2.2 NORMALIZED CROSS-SECTIONAL MOMENTUM
+    20-day percentage momentum for each stock in universe:
+
+        MOM_i = [ Close_{i, t} - Close_{i, t-20} ] / Close_{i, t-20}
+
+2.3 COMPOSITE ALPHA SCORE FOR 7-DAY RANKING
+    For stock i in Universe (55 CME proxy equities):
+
+        Score_i = [ 0.60 * Z(MOM_i) ] + [ 0.40 * min(3.0, RVOL_i) ]
+
+    - Top 10-15 ranked stocks form the persistent weekly candidate pool.
+    - Bias assignment:
+        If MOM_i > +0.005 and RVOL_i > 1.20  --> LONG (BUY)
+        If MOM_i < -0.005 and RVOL_i > 1.20  --> SHORT (SELL)
+        Otherwise                            --> NEUTRAL
+
+================================================================================
+3. ML ENSEMBLE & META-AGGREGATION
+================================================================================
+
+3.1 RIDGE REGRESSION (L2 Regularized Directional Forecast)
+    Minimizes squared error with weight penalization:
+
+        L_Ridge(beta) = || Y - X*beta ||^2 + lambda * || beta ||^2
+        Analytical solution: beta = (X^T * X + lambda * I)^(-1) * X^T * Y
+
+3.2 XGBOOST (Second-Order Gradient Boosted Trees)
+    Minimizes objective via Taylor series expansion:
+
+        Obj^{(m)} = sum_{i=1}^{n} [ g_i * f_m(x_i) + 0.5 * h_i * f_m(x_i)^2 ] + Omega(f_m)
+        where:
+            g_i = d(Loss) / d(y_hat)      (first order gradient)
+            h_i = d^2(Loss) / d(y_hat)^2   (Hessian second order curvature)
+
+3.3 LSTM (Long Short-Term Memory Sequence Network)
+    Gated recurring units across 20-candle lookback:
+
+        f_t = sigmoid( W_f * [h_{t-1}, x_t] + b_f )    (forget gate)
+        i_t = sigmoid( W_i * [h_{t-1}, x_t] + b_i )    (input gate)
+        C_tilde = tanh( W_c * [h_{t-1}, x_t] + b_c )   (candidate cell state)
+        C_t = f_t * C_{t-1} + i_t * C_tilde            (new cell state)
+        o_t = sigmoid( W_o * [h_{t-1}, x_t] + b_o )    (output gate)
+        h_t = o_t * tanh(C_t)                          (hidden output)
+
+3.4 REGIME-ADAPTIVE META-AGGREGATION
+    Final directional signal S_composite:
+
+        S_composite = w_ridge * y_ridge + w_xgb * y_xgb + w_lstm * y_lstm
+
+    Regime weight matrix:
+        +------------------+----------+--------+---------+
+        | Regime           | w_ridge  | w_xgb  | w_lstm  |
+        +------------------+----------+--------+---------+
+        | High Volatility  | 0.20     | 0.50   | 0.30    |
+        | Trending Up      | 0.35     | 0.35   | 0.30    |
+        | Low Volatility   | 0.50     | 0.30   | 0.20    |
+        | Neutral          | 0.34     | 0.33   | 0.33    |
+        +------------------+----------+--------+---------+
+
+3.5 REAL-TIME REGIME CLASSIFICATION TRIGGER (GARCH + HMM)
+    The system classifies market state into one of four regimes {High Vol, Trending Up, Low Vol, Neutral}
+    using a dual mathematical trigger combining instantaneous GARCH conditional volatility with
+    a 2-state/4-state Gaussian Hidden Markov Model (HMM):
+
+    Trigger 1: Continuous GARCH + Directional Drift Partitioning
+        Let sigma_garch(t) be the current instantaneous volatility from Section 1.3.
+        Let mu_drift(t) = [ Close(t) - SMA_20(Close)(t) ] / SMA_20(Close)(t).
+        Let Vol_percentile(t) = Empirical percentile of sigma_garch(t) over trailing 252 bars.
+
+        State Assignment Decision Rule:
+        1. High Volatility:
+           Condition: Vol_percentile(t) >= 0.75  OR  sigma_garch(t) > 0.025
+           (Prioritizes XGBoost tree non-linear split resilience)
+
+        2. Trending Up:
+           Condition: Vol_percentile(t) < 0.75  AND  mu_drift(t) > +0.010  AND  RSI_14(t) > 55.0
+           (Momentum persistence: balanced Ridge + XGBoost + LSTM)
+
+        3. Low Volatility (Mean Reverting):
+           Condition: Vol_percentile(t) <= 0.30  AND  |mu_drift(t)| <= 0.005
+           (Mean-reversion favors Ridge regression regularization)
+
+        4. Neutral:
+           Condition: Default state when neither extreme volatility nor strong drift is confirmed.
+
+    Trigger 2: Gaussian Hidden Markov Model (HMM) Viterbi Path
+        Hidden state sequence S = {s_1, s_2, ..., s_T} with transition probability matrix A:
+            A_{i, j} = P( S_t = j | S_{t-1} = i )
+        Emission distribution for observable return r_t:
+            P( r_t | S_t = j ) = N( mu_j, sigma_j^2 )
+
+        Optimal state trajectory computed via Viterbi dynamic programming:
+            V_{1, k} = pi_k * P( r_1 | S_1 = k )
+            V_{t, k} = max_j [ V_{t-1, j} * A_{j, k} ] * P( r_t | S_t = k )
+            s_t*     = argmax_k [ V_{t, k} ]
+
+3.6 INSTITUTIONAL FOOTPRINT & FLOW (IFF) COMPOSITE SCORE & VETO GATE
+    Layers institutional positioning and real-time microstructure order flow onto
+    the ML ensemble's composite directional signal S_composite:
+
+    1. Composite Flow Score Formulation:
+        S_flow(t) = w_COT * Z_COT_norm(t) + w_CVD * CVD_div(t) + w_OBI * rho(t)
+
+        Where:
+        - Z_COT_norm(t) in [-1.0, +1.0]: 52-week normalized Z-score of CFTC Managed Money net positions.
+          For crypto perpetuals, CME BTC/ETH futures COT serves as a soft proxy.
+        - CVD_div(t) in {-1.0, 0.0, +1.0}: Microstructure order absorption divergence from Section 1.7.
+        - rho(t) in [-1.0, +1.0]: Order Book Imbalance from Section 1.2.
+
+        Weight Configurations:
+        - Crypto Perpetuals:    w = [0.20, 0.50, 0.30]   (Heavily weights live CVD & OBI)
+        - US Equities / Futures: w = [0.50, 0.30, 0.20]   (Heavily weights official COT positioning)
+
+    2. Directional Conflict Hard Veto Rule:
+        If sign(S_composite) * S_flow < 0  AND  |S_flow| > IFF_VETO_THRESHOLD (0.50):
+            S_composite_final = 0.0
+            iff_veto = True
+            (Signal is completely neutralized; zero execution risk accepted against institutional flow)
+
+    3. Pro-Trend Soft Scaling Rule (When not vetoed):
+        S_composite_final = S_composite * [ 1.0 + 0.5 * S_flow ]
+        (Amplifies signals aligning with institutional flow by up to +50%, softens unvetoed counter-drifts)
+
+================================================================================
+4. SIZING & EXECUTION MATH (US EQUITIES & FUTURES)
+================================================================================
+
+4.1 DEAD-DAY FILTER & CHOP SESSION DETECTOR
+    Evaluates 3 non-tradable chop session conditions before allocating capital:
+        1. Range/ATR Ratio  = (High_day - Low_day) / ATR_14 < 0.85
+        2. Relative Volume  = Volume_5m / Avg_Volume_5m < 0.70
+        3. Realized Vol     = StdDev(Log_Returns_20) < 0.008
+
+        If Dead-Day Flag is True:
+            effective_conviction = 0.0  (Signals neutralized; zero trades taken)
+        Else:
+            effective_conviction = Signal_Confidence
+
+4.2 DYNAMIC LEVERAGE CURVE WITH ATR STRETCH PENALTY
+    Leverage is continuously scaled using effective conviction and penalized on extended price moves:
+
+        Leverage = MIN_LEV + (MAX_LEV - MIN_LEV) * effective_conviction * [ 1.0 / max(1.0, (Range / ATR_14) / 1.2) ]
+
+        Where:
+            Crypto Perpetuals:    MIN_LEV = 1.0x, MAX_LEV = 5.0x
+            US Stock Futures:     MIN_LEV = 1.0x, MAX_LEV = 10.0x
+            Stretch Penalty:      Dampens leverage when price range extends beyond 1.2x ATR.
+
+4.3 $10.00 RISK-BUDGET USD CONTRACT SIZING (US Stock Futures)
+    Calculates position size strictly bounded to maximum dollar risk per trade ($10.00 Risk Budget):
+
+        Stop_Distance = max(0.01, 2.0 * ATR_14)
+        Target_Qty    = max(0.1, (Risk_Budget_USD / Stop_Distance) * (Dynamic_Leverage / 5.0))
+        Notional_Value = Target_Qty * Current_Price
+
+4.4 DYNAMIC HALF-KELLY TRAILING RECALIBRATION
+    Standard static Kelly estimates lead to catastrophic over-leveraging when win rates shift.
+    The system continuously updates win probability p_t and payoff ratio b_t over a sliding window
+    of W = 50 completed executions:
+
+    1. Bayesian Win Probability (Laplace Smoothing with Uniform Beta(1,1) Prior):
+        p_hat(t) = [ N_wins(t) + alpha ] / [ W + alpha + beta ]
+        q_hat(t) = 1.0 - p_hat(t)
+        where:
+            alpha = 1.0, beta = 1.0 (prevents 0% or 100% boundary collapse)
+            N_wins(t) = count of trades with Realized_PnL > 0 in window W
+
+    2. Dynamic Trailing Payoff Ratio b_hat(t):
+        Avg_Win(t)  = ( 1 / max(1, N_wins) )   * sum_{j in Wins} Realized_PnL_j
+        Avg_Loss(t) = ( 1 / max(1, N_losses) ) * sum_{k in Losses} |Realized_PnL_k|
+
+        b_raw(t) = Avg_Win(t) / max( 0.01, Avg_Loss(t) )
+        b_hat(t) = max( 0.50, min( 4.0, b_raw(t) ) )   (bounded to eliminate outlier skew)
+
+    3. Volatility-Damped Half-Kelly Fraction:
+        f_raw* = 0.50 * [ ( p_hat(t) * b_hat(t) - q_hat(t) ) / b_hat(t) ]
+
+        f_damped* = f_raw* * min( 1.0, sigma_target / sigma_garch(t) )
+        where:
+            sigma_target = 0.012 (daily volatility target ~19% annualized)
+            sigma_garch(t) = conditional volatility from Section 1.3
+
+        4. IFF Flow-Adjusted Allocation Multiplier:
+            f_final = f_damped* * ( 1.0 + S_flow )
+
+        Final Allocation:
+            Allocation_pct = max( 0.0, min( f_final, MAX_POSITION_SIZE_PCT ) )
+            (Pre-capped at 15.0% maximum portfolio allocation to preserve Risk Guard invariants)
+
+4.3 MULTI-STAGE PROFIT TARGETS & VPOC-AWARE TAKE-PROFIT SNAPPING
+    Dynamic ATR trailing stop protects downside, while structural Volume-at-Price
+    levels (VAH / VAL / VPOC) determine optimal exit liquidity boundaries:
+
+    Stop Levels:
+        LONG  Trailing Stop: Stop_t = max( Stop_{t-1}, Price_t - 2.0 * ATR_14 )
+        SHORT Trailing Stop: Stop_t = min( Stop_{t-1}, Price_t + 2.0 * ATR_14 )
+
+    Baseline ATR Profit Targets:
+        TP1_base = Entry_Price +/- (1.0 * ATR_14)   --> Closes 40% of position
+        TP2_base = Entry_Price +/- (2.0 * ATR_14)   --> Closes 30% of position
+        Trailing Exit : Hit Stop_t                 --> Closes remaining 30%
+
+    VPOC / VAH / VAL Structural Snapping Logic:
+        If structural resistance/support is closer than the statistical ATR target,
+        take-profit orders snap one tick inside the structural boundary:
+
+        For LONG Positions:
+            If VAH exists and Entry_Price < VAH < TP1_base:
+                TP1 = VAH - 1_tick,  Reason = "TP1_VAP_SNAP"
+            Else If VPOC exists and Entry_Price < VPOC < TP1_base:
+                TP1 = VPOC - 1_tick, Reason = "TP1_VAP_SNAP"
+            Else:
+                TP1 = TP1_base,      Reason = "TP1_+1_SIGMA"
+
+            If VAH exists and TP1 < VAH < TP2_base:
+                TP2 = VAH - 1_tick,  Reason = "TP2_VAP_SNAP"
+            Else:
+                TP2 = TP2_base,      Reason = "TP2_+2_SIGMA"
+
+        For SHORT Positions:
+            If VAL exists and TP1_base < VAL < Entry_Price:
+                TP1 = VAL + 1_tick,  Reason = "TP1_VAP_SNAP"
+            Else If VPOC exists and TP1_base < VPOC < Entry_Price:
+                TP1 = VPOC + 1_tick, Reason = "TP1_VAP_SNAP"
+            Else:
+                TP1 = TP1_base,      Reason = "TP1_+1_SIGMA"
+
+            If VAL exists and TP2_base < VAL < TP1:
+                TP2 = VAL + 1_tick,  Reason = "TP2_VAP_SNAP"
+            Else:
+                TP2 = TP2_base,      Reason = "TP2_+2_SIGMA"
+
+4.4 FRICTION, SLIPPAGE & MICROSTRUCTURE EXECUTION MODELS
+    Microstructure friction models ensure theoretical alpha survives live execution:
+
+    1. Half-Spread Cost:
+        Cost_spread = ( Price_Ask(t) - Price_Bid(t) ) / 2.0 = Spread(t) / 2.0
+
+    2. Non-Linear Market Impact (Almgren-Chriss Square-Root Law with OBI Bias):
+        Slippage(Q) = eta * sigma_garch(t) * sqrt( (|Q| * Price_mid) / ADV_20 ) * [ 1.0 + sign(Q) * rho(t) ]
+        where:
+            eta = 0.15 (liquidity parameter)
+            ADV_20 = 20-day average daily dollar volume
+            rho(t) = Order Book Imbalance from Section 1.2
+            (When rho opposes order direction, adverse depth penalty increases slippage)
+
+    3. Latency-Induced Adverse Selection:
+        Delta_P_latency = sigma_garch(t) * Price_mid * sqrt( Delta_t_ms / (1000 * 86400 * 252) )
+        where Delta_t_ms = measured network loop latency (typically 65ms - 130ms)
+
+    4. Net Effective Execution Price:
+        For BUY order:
+            P_eff_entry = Price_mid + Cost_spread + Slippage(Q) + Delta_P_latency
+        For SELL order:
+            P_eff_entry = Price_mid - Cost_spread - Slippage(Q) - Delta_P_latency
+
+    5. Direct Commission & Regulatory Fees:
+        Fee_order = max( $1.00, |Q| * $0.005 ) + ( |Q| * Price_mid * 0.0000278 )  (SEC / FINRA TAF fee)
+
+    6. Friction-Deducted Net PnL:
+        PnL_net = PnL_gross - [ Fee_entry + Fee_exit ] - [ (Cost_spread + Slippage_total) * |Q| ]
+
+    7. Friction-Adjusted Profit Targets:
+        Total_Friction_per_Share = ( Cost_spread + Slippage(Q) ) + ( Fee_order / |Q| )
+        TP1* = Entry_Price +/- [ (1.0 * ATR_14) + Total_Friction_per_Share ]
+        TP2* = Entry_Price +/- [ (2.0 * ATR_14) + Total_Friction_per_Share ]
+
+================================================================================
+5. PORTFOLIO RISK GUARD & LIMIT MATH
+================================================================================
+
+5.1 UNREALIZED PROFIT AND LOSS (PnL)
+    For LONG position (Qty > 0):
+        Unrealized PnL = ( Current_Price - Entry_Price ) * Qty
+        Return %       = ( Current_Price - Entry_Price ) / Entry_Price
+
+    For SHORT position (Qty < 0):
+        Unrealized PnL = ( Entry_Price - Current_Price ) * |Qty|
+        Return %       = ( Entry_Price - Current_Price ) / Entry_Price
+
+5.2 INSTRUMENT CONCENTRATION & EXPOSURE BOUNDS
+    Gross Buying Power = Account_Equity * Leverage (Default 10x for paper trading)
+
+    Single Instrument Concentration Check:
+        Exposure_Instr = ( |Qty_i| * Current_Price_i ) / Gross_Buying_Power
+        Constraint: Exposure_Instr + Proposed_Allocation <= 25.0%
+
+    Total Portfolio Exposure Check:
+        Total_Exposure = sum_{i=1}^{M} [ ( |Qty_i| * Current_Price_i ) / Gross_Buying_Power ]
+        Constraint: Total_Exposure + Proposed_Allocation <= 80.0%
+
+5.3 DAILY DRAWDOWN & CIRCUIT BREAKERS
+    Calculates equity drawdown from day start:
+
+        Daily_DD = ( Daily_Start_Equity - Current_Equity ) / Daily_Start_Equity
+        
+        Circuit Breaker Limits:
+        - US Stock Futures Daily DD Limit = 3.0% ($30 on $1,000 equity)
+        - Crypto Futures Daily DD Limit   = 6.0% ($60 on $1,000 equity)
+        - Monthly Drawdown Hard Stop      = 10.0%
+
+================================================================================
+6. BACKEND ACCOUNTING, P/L, LEVERAGE & MARGIN MATHEMATICS
+================================================================================
+
+6.1 CASH BALANCE & REALIZED P/L RECURRENCE
+    Let B_0 be the initial deposited capital (e.g. $1,000.00).
+    When an open position of size Q_close is closed at exit price P_exit from entry price P_entry:
+
+        Realized_PnL_k = ( P_exit - P_entry ) * Q_close        (for Long positions)
+        Realized_PnL_k = ( P_entry - P_exit ) * |Q_close|      (for Short positions)
+
+    Cumulative Realized P/L across all K historical closed trades:
+        Realized_PnL_total = sum_{k=1}^{K} Realized_PnL_k
+
+    Cash Balance (settled available cash):
+        Balance_t = B_0 + Realized_PnL_total - sum_{k} Fees_k
+
+6.2 MARK-TO-MARKET UNREALIZED P/L CALCULATION
+    For each active position i in open positions {1, 2, ..., M}:
+        Let Q_i be the signed position quantity (+ for LONG, - for SHORT):
+
+        Unrealized_PnL_i(t) = ( Current_Price_i(t) - Entry_Price_i ) * Q_i
+        Unrealized_Return%_i(t) = [ Unrealized_PnL_i(t) / ( |Q_i| * Entry_Price_i ) ] * 100%
+
+    Total Portfolio Unrealized P/L:
+        Unrealized_PnL_total(t) = sum_{i=1}^{M} Unrealized_PnL_i(t)
+
+6.3 TOTAL NET ACCOUNT EQUITY (Net Liquidation Value / NLV)
+    The true real-time liquidation value of the account:
+
+        Equity(t) = Balance_t + Unrealized_PnL_total(t)
+
+6.4 TOTAL CUMULATIVE P/L & TOTAL RETURN PERCENTAGE
+    Combines both realized cash gains and open mark-to-market position swings:
+
+        Total_PnL(t) = Realized_PnL_total + Unrealized_PnL_total(t)
+                     = Equity(t) - B_0
+
+        Total_Return%(t) = [ Total_PnL(t) / B_0 ] * 100%
+
+6.5 NOTIONAL VALUE, MARGIN REQUIREMENTS & LEVERAGE MATH
+    Let L_max be the maximum allowed leverage multiplier (e.g. 10.0x):
+
+    1. Total Notional Market Value:
+        V_notional(t) = sum_{i=1}^{M} ( |Q_i| * Current_Price_i(t) )
+
+    2. Effective Leverage in Use:
+        Effective_Leverage(t) = V_notional(t) / Equity(t)
+        (Example: $3,400 notional on $1,000 equity = 3.4x leverage)
+
+    3. Initial Margin Requirement (Margin Used):
+        Margin_Used(t) = V_notional(t) / L_max
+                       = sum_{i=1}^{M} [ ( |Q_i| * Current_Price_i(t) ) / L_max ]
+        (At 10x leverage, Initial Margin is 10.0% of total notional value)
+
+    4. Free (Available) Margin:
+        Free_Margin(t) = max( 0.0, Equity(t) - Margin_Used(t) )
+
+    5. Gross Buying Power & Available Buying Power:
+        Gross_Buying_Power(t)     = Equity(t) * L_max
+        Available_Buying_Power(t) = Free_Margin(t) * L_max
+                                  = max( 0.0, Gross_Buying_Power(t) - V_notional(t) )
+
+6.6 MARGIN LEVEL % (ACCOUNT HEALTH FACTOR)
+    Standard institutional risk ratio:
+
+        Margin_Level%(t) = [ Equity(t) / Margin_Used(t) ] * 100%
+        
+        Risk Thresholds:
+        - Margin_Level% > 200% : Healthy / Normal operation
+        - Margin_Level% <= 100%: Margin Call (New position entries blocked)
+        - Margin_Level% <= 50% : Liquidation Trigger (Emergency stop-out of all positions)
+
+6.7 ISOLATED POSITION LIQUIDATION PRICE
+    The exact bankruptcy threshold price for a single leveraged contract:
+    Let MMR be the Maintenance Margin Rate (default 5.0% = 0.05):
+
+        For LONG position:
+            P_liq = Entry_Price * [ 1.0 - (1.0 / L_max) + MMR ]
+            (Example: At 10x leverage & 5% MMR, P_liq = Entry * [1 - 0.10 + 0.05] = 95% of Entry)
+
+        For SHORT position:
+            P_liq = Entry_Price * [ 1.0 + (1.0 / L_max) - MMR ]
+            (Example: At 10x leverage & 5% MMR, P_liq = Entry * [1 + 0.10 - 0.05] = 105% of Entry)
+
+================================================================================
+                               END OF SPECIFICATION
+================================================================================

@@ -1,65 +1,121 @@
 ===============================================================================
-TEDENG — FORKED QUANTITATIVE MATHEMATICAL & LOGIC WORKFLOW
+TRDENG — FORKED QUANTITATIVE MATHEMATICAL & LOGIC WORKFLOW
+WITH GOAL & RISK GATING MODULE, DEAD-DAY FILTER, & DYNAMIC LEVERAGE CURVE
 ===============================================================================
 
-1. FEATURE ENGINEERING & FRACTIONAL DIFFERENCING FORK
+1. FEATURE ENGINEERING & LIVE MICROSTRUCTURE TICK FORK
 -------------------------------------------------------------------------------
 [A] US Stock Futures (Session-Aware Fractional Differencing):
     If Time_delta > 48 Hours (Weekend Market Gap):
         Pause decay recursion weight convolution:
             w_k = -w_{k-1} * (d - k + 1) / k
         Prevents artificial Friday-to-Monday volatility spikes.
+    COT Bias: Direct CFTC Disaggregated Futures Managed Money net Z-score (Z_COT).
 
-[B] Crypto Perpetuals (Continuous Fractional Differencing):
-    Continuous 24/7 time series memory decay calculation.
+[B] Crypto Perpetuals (Continuous Fractional Differencing & Live Microstructure):
+    - Continuous 24/7 time series memory decay calculation.
+    - Binance aggTrade WebSocket stream feeds live aggressive taker ticks:
+        * 500-bin incremental Volume-at-Price (VAP) histogram tracking VPOC, VAH, VAL.
+        * Cumulative Volume Delta (CVD) tracking order absorption divergence (W = 100 ticks).
+    - COT Bias: CME BTC/ETH futures COT used as a soft proxy.
 
 
-2. GAUSSIAN HMM REGIME LIKELIHOOD FORK
+2. GAUSSIAN HMM REGIME LIKELIHOOD & DEAD-DAY FILTER
 -------------------------------------------------------------------------------
-[A] US Stock Futures Model Calibration:
-        Volatility Threshold: garch_vol > 0.015 (1.5% daily move triggers High Volatility)
+[A] Volatility Threshold Calibration:
+        US Stock Futures: garch_vol > 0.015 (1.5% daily move triggers High Volatility)
+        Crypto Perpetuals: garch_vol > 0.040 (4.0% daily move triggers High Volatility)
 
-[B] Crypto Perpetuals Model Calibration:
-        Volatility Threshold: garch_vol > 0.040 (4.0% daily move triggers High Volatility)
-        Prevents false volatility alarms caused by standard intraday crypto noise.
+[B] Dead-Day Detector (Non-Tradable Chop Filter):
+        Checks 3 non-tradable conditions:
+        1. Range/ATR ratio < 0.85
+        2. Relative Volume (RVOL) < 0.70
+        3. Realized Volatility < 0.008 (0.8%)
+
+        If Dead-Day detected:
+            effective_conviction = 0.0  (Zero trades; capital preserved)
+        Else:
+            effective_conviction = composite_signal_confidence
 
 
-3. SEPARATED RISK MANAGEMENT & CIRCUIT BREAKERS
+3. INSTITUTIONAL FOOTPRINT & FLOW (IFF) ALPHA OVERLAY GATE
 -------------------------------------------------------------------------------
-[A] Unified Kelly Criterion Sizing:
-        f* = (p * (b + 1) - 1) / b
-        f_half = 0.5 * f* (Capped at 20% max allocation)
+Combines structural macro bias with real-time order book and trade tape signals:
+    S_flow = w_COT * Z_COT + w_CVD * CVD_div + w_OBI * rho
 
-[B] Separated Circuit Breakers:
-        - US Stock Futures: Strict 3% Daily Drawdown Limit ($300 cap on $10,000 equity)
-        - Crypto Perpetuals: 6% Daily Drawdown Limit
+    Decision Gate applied to ML composite directional signal S_composite:
+    1. Hard Veto Check:
+       If sign(S_composite) * S_flow < 0  AND  |S_flow| > 0.50:
+           S_composite = 0.0  (VETO: Trade dropped before signal broadcast)
+    2. Pro-Trend Soft Scale:
+       Else:
+           S_composite = S_composite * (1.0 + 0.5 * S_flow)
 
 
-4. SEPARATED WORKFLOW FLOWCHART (MERMAID)
+4. GOAL & RISK GATING MODULE: DYNAMIC LEVERAGE & CIRCUIT BREAKERS
+-------------------------------------------------------------------------------
+[A] Dynamic Leverage Curve with Stretch Penalty:
+        Leverage = MIN_LEV + (MAX_LEV - MIN_LEV) * effective_conviction * [ 1.0 / max(1.0, range_atr_ratio / 1.2) ]
+
+        Where:
+            Crypto: MIN_LEV = 1.0x, MAX_LEV = 5.0x
+            US Equities: MIN_LEV = 1.0x, MAX_LEV = 10.0x
+            Stretch Penalty dampens leverage when price is extended beyond 1.2x ATR.
+
+[B] Risk Budget Sizing:
+        - US Equities: Risk Budget USD = $10.00 per trade
+        - Target Qty = (Risk_Budget / Stop_Distance) * (Dynamic_Leverage / 5.0)
+
+[C] Multi-Horizon Circuit Breakers & Monthly Ceilings:
+        - Monthly Ceilings: 20 Crypto Perpetuals / 80 US Equities (auto-throttles new entries when met)
+        - 4% Daily Loss Circuit Breaker: If daily loss >= 4.0%, halts entries until next day reset
+        - 18% Monthly Drawdown Breaker: If equity drawdown from peak >= 18.0%, halts all entries until month roll
+
+
+5. STRUCTURAL OMS EXECUTION & EXIT LOGIC
+-------------------------------------------------------------------------------
+[A] VPOC / VAH / VAL Take-Profit Snapping:
+    If structural level is closer than standard +1.0 ATR / +2.0 ATR targets:
+        Snap TP order to (Structural_Price - 1 tick) for Longs or (Structural_Price + 1 tick) for Shorts.
+[B] Trailing Stop:
+    Dynamic ATR trailing stop (Entry +/- 2.0 * ATR_14) ratchets with favorable price movement.
+
+
+6. QUANTITATIVE WORKFLOW FLOWCHART (MERMAID)
 -------------------------------------------------------------------------------
 ```mermaid
 flowchart TD
-    Data[Market Ticks Data Stream] --> AssetSplit{Asset Class?}
+    Data[Market Data Feeds: yfinance REST + Binance aggTrade WS] --> AssetSplit{Asset Class?}
 
     AssetSplit -- US Stock Futures --> US_FD["Session-Aware FracDiff (Pause decay on >48h gaps)"]
-    AssetSplit -- Crypto Perpetuals --> CR_FD["Continuous 24/7 FracDiff"]
+    AssetSplit -- Crypto Perpetuals --> CR_FD["Continuous 24/7 FracDiff + aggTrade Tick Stream"]
 
+    CR_FD --> Micro["vap_cvd.py: 500-Bin VAP VPOC/VAH/VAL & CVD Divergence"]
     US_FD --> US_HMM["US Futures HMM Model (1.5% Vol Threshold)"]
     CR_FD --> CR_HMM["Crypto HMM Model (4.0% Vol Threshold)"]
 
-    US_HMM & CR_HMM --> Kelly["Kelly Criterion Position Sizing: f* = (p(b+1) - 1)/b"]
+    US_HMM & CR_HMM --> MetaAgg["Meta-Aggregator: Blended S_composite (Ridge + XGB + LSTM)"]
+    Micro & Data --> IFF["alpha_overlay/iff.py: Compute Flow Score S_flow (COT + CVD + OBI)"]
 
-    Kelly --> RiskSplit{Asset Class Risk Guard?}
+    MetaAgg & IFF --> IFFGate{Opposing Flow & |S_flow| > 0.5?}
+    IFFGate -- YES (Conflict) --> VETO["VETO SIGNAL: Set S_composite = 0 (Execution Dropped)"]
+    IFFGate -- NO (Aligned) --> Scale["Scale S_composite by (1 + 0.5*S_flow)"]
 
-    RiskSplit -- US Stock Futures --> CB_US{"Daily Drawdown >= 3% ($300 Limit)?"}
-    RiskSplit -- Crypto Perpetuals --> CB_CR{"Daily Drawdown >= 6% Limit?"}
+    Scale --> MicroBuffer["Micro-Buffer: Non-Blocking 5ms Polling Hold Window"]
+    MicroBuffer --> StateReg["SymbolStateRegistry: Thread-Safe State Store"]
 
-    CB_US -- YES --> FLATTEN_US["EMERGENCY FLATTEN: Liquidate US Futures"]
-    CB_CR -- YES --> FLATTEN_CR["EMERGENCY FLATTEN: Liquidate Crypto"]
+    StateReg --> DeadDay{Dead-Day Filter: Chop Session?}
+    DeadDay -- YES (Range/ATR < 0.85) --> ZERO_CONV["Effective Conviction = 0.0 (No Trade)"]
+    DeadDay -- NO --> DynLev["Compute Dynamic Leverage (1x to 5x Crypto / 1x to 10x Stocks) with Stretch Penalty"]
 
-    CB_US -- NO --> OMS["Execute OMS 10x Futures Positions with ATR Trailing Stop"]
-    CB_CR -- NO --> OMS
+    DynLev --> GoalGate{Goal & Risk Gating Check}
+
+    GoalGate -- Ceiling Reached (20 Crypto / 80 Stocks) --> BLOCK_CEIL["Auto-Throttle Entry: Monthly Target Met"]
+    GoalGate -- Daily Loss >= 4.0% --> BLOCK_DAILY["Daily Circuit Breaker Tripped (Resets Next Day)"]
+    GoalGate -- Monthly Drawdown >= 18.0% --> BLOCK_MONTHLY["Monthly Circuit Breaker Tripped (Halt)"]
+
+    GoalGate -- PASS (All Clear) --> OMS["Execute OMS: Dynamic Leverage + Risk Budget Sizing + VPOC TP Snapping"]
+    OMS --> EE["ExecutionEngine Pipeline"]
+    EE --> Trace["DecisionTrace Logging to decision_trace.jsonl"]
 ```
-
-Math Workflow Image updated at: d:\New folder\TEDENG\math_workflow.png
 ===============================================================================

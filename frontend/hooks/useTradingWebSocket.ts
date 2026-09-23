@@ -1,6 +1,26 @@
 import { useEffect, useRef } from 'react';
 import { useTradingStore } from '@/store/useTradingStore';
 
+/** Normalize OMS exit records (sim_exit_*) into the OrderExecution shape */
+function normalizeExecution(ex: any) {
+  return {
+    order_id:               ex.order_id  ?? ex.alpaca_order_id ?? `oms_${Date.now()}`,
+    signal_id:              ex.signal_id ?? ex.order_id ?? '',
+    instrument:             ex.instrument ?? ex.symbol ?? '',
+    action:                 ex.action ?? (ex.qty > 0 ? 'BUY' : 'SELL'),
+    order_type:             ex.order_type ?? (ex.reason ? 'MARKET' : 'LIMIT'),
+    portfolio_allocation_pct: ex.portfolio_allocation_pct ?? ex.alloc_pct ?? 0,
+    confidence:             ex.confidence ?? 0,
+    timestamp_proposed:     ex.timestamp ?? ex.timestamp_proposed ?? (Date.now() / 1000),
+    risk_state:             ex.risk_state ?? (ex.oms_state === 'SKIPPED_BY_RISK' ? 'REJECTED' : 'APPROVED'),
+    checks_passed:          ex.checks_passed ?? [],
+    failed_check:           ex.failed_check ?? ex.oms_detail ?? null,
+    oms_state:              ex.oms_state ?? 'FILLED',
+    oms_detail:             ex.oms_detail ?? ex.reason ?? null,
+    notional_value:         ex.notional_value ?? ex.realized_pnl ?? null,
+  };
+}
+
 export const useTradingWebSocket = (url: string = 'ws://localhost:8000/ws/trading') => {
   const wsRef = useRef<WebSocket | null>(null);
   const {
@@ -12,6 +32,7 @@ export const useTradingWebSocket = (url: string = 'ws://localhost:8000/ws/tradin
     addExecution,
     addLog,
     setConnectionStatus,
+    updateMicrostructure,
   } = useTradingStore();
 
   useEffect(() => {
@@ -41,9 +62,13 @@ export const useTradingWebSocket = (url: string = 'ws://localhost:8000/ws/tradin
           try {
             const data = JSON.parse(event.data);
             switch (data.type) {
+              case 'HISTORICAL_CANDLES':
+                useTradingStore.getState().setHistoricalCandles(data.payload);
+                break;
               case 'TICK':
                 updateTick(data.payload);
                 break;
+
               case 'ORDER_BOOK':
                 updateOrderBook(data.payload);
                 break;
@@ -54,7 +79,7 @@ export const useTradingWebSocket = (url: string = 'ws://localhost:8000/ws/tradin
                 addSignal(data.payload);
                 break;
               case 'EXECUTION':
-                addExecution(data.payload);
+                addExecution(normalizeExecution(data.payload));
                 break;
               case 'LOG':
                 addLog(data.payload);
@@ -64,6 +89,15 @@ export const useTradingWebSocket = (url: string = 'ws://localhost:8000/ws/tradin
                 break;
               case 'SCREENER_UPDATE':
                 useTradingStore.getState().updateScreenerTargets(data.payload);
+                break;
+              case 'MICROSTRUCTURE':
+                useTradingStore.getState().updateMicrostructure(data.payload);
+                break;
+              case 'MARKET_SESSION':
+                useTradingStore.getState().updateMarketSession(data.payload);
+                break;
+              case 'GOAL_UPDATE':
+                useTradingStore.getState().updateGoalSummary(data.payload);
                 break;
             }
           } catch (err) {

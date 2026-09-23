@@ -1,4 +1,4 @@
-export type Instrument = 'BTC-USD' | 'ETH-USD' | 'AAPL' | 'SPY';
+export type Instrument = string;
 
 export interface OHLCV {
   time: number; // Unix timestamp in seconds
@@ -43,6 +43,7 @@ export interface AccountState {
   equity: number;
   balance: number;
   realized_pl: number;
+  unrealized_pl?: number;
   gross_buying_power: number;
   active_drawdown_pct: number;
   positions: Record<string, Position>;

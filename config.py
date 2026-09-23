@@ -88,7 +88,9 @@ REGIME_VOL_THRESHOLD_LOW: float  = 0.008
 REGIME_WEIGHTS: dict = {
     "low_volatility":  {"ridge": 0.50, "xgb": 0.30, "lstm": 0.20},
     "trending":        {"ridge": 0.20, "xgb": 0.45, "lstm": 0.35},
+    "trending_up":     {"ridge": 0.35, "xgb": 0.35, "lstm": 0.30},
     "high_volatility": {"ridge": 0.10, "xgb": 0.30, "lstm": 0.60},
+    "neutral":         {"ridge": 0.34, "xgb": 0.33, "lstm": 0.33},
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,7 +146,48 @@ FUTURES_LEVERAGE: float = float(os.environ.get("MAX_LEVERAGE", "10.0"))
 INITIAL_CAPITAL: float = float(os.environ.get("INITIAL_CAPITAL", "1000.0"))
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MARKET SESSIONS & TRADING HOURS
+# ─────────────────────────────────────────────────────────────────────────────
+ENFORCE_US_MARKET_HOURS: bool = True     # Strict US Regular Trading Hours (RTH: 09:30 - 16:00 ET Mon-Fri)
+US_MARKET_TIMEZONE: str = "America/New_York"
+US_RTH_START_TIME: str = "09:30"
+US_RTH_END_TIME: str = "16:00"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
 DASHBOARD_REFRESH_SECONDS: int = 10
 SIGNAL_HISTORY_MAX: int = 200
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IFF / ALPHA OVERLAY  (Institutional Footprint & Flow + Predictive Microstructure)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Additional broker channels (mirror tedeng:features / tedeng:signals pattern)
+REDIS_CHANNEL_FLOW_SCORE: str = "tedeng:flow_score"
+REDIS_CHANNEL_VAP_STATE:  str = "tedeng:vap_state"
+
+# S_flow veto threshold: if ML direction opposes flow AND |S_flow| > this → veto
+# e.g. LONG signal with S_flow < -0.5 → blended_signal set to 0.0
+IFF_VETO_THRESHOLD: float = 0.5
+
+# VAP histogram settings
+VAP_BIN_COUNT: int = 500           # number of fixed price bins per instrument
+VAP_VALUE_AREA_PCT: float = 0.70   # fraction of total volume in value area
+VAP_DIVERGENCE_WINDOW: int = 100   # rolling tick window for CVD/price extrema
+
+# Flow score blend weights [w_cot, w_cvd_divergence, w_obi]
+# Crypto instruments use a proxy COT → lower w_cot weight
+FLOW_SCORE_WEIGHTS_CRYPTO:   list = [0.20, 0.50, 0.30]
+FLOW_SCORE_WEIGHTS_EQUITIES: list = [0.50, 0.30, 0.20]
+
+# FUTURE-PROOFING ARCHITECTURE FEATURE FLAGS
+# ─────────────────────────────────────────────────────────────────────────────
+ENABLE_PERCENTILE_DEAD_DAY: bool = True
+ENABLE_EQUITY_RISK_SCALING: bool = True
+ENABLE_MICRO_BUFFER: bool = True
+
+# MONGODB PERSISTENCE CONFIGURATION
+MONGODB_URI: str = os.environ.get("MONGODB_URI", "")
+
+

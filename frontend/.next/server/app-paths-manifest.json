@@ -1,3 +1,7 @@
 {
-  "/page": "app/page.js"
+  "/_not-found/page": "app/_not-found/page.js",
+  "/us-futures/page": "app/us-futures/page.js",
+  "/crypto/page": "app/crypto/page.js",
+  "/page": "app/page.js",
+  "/trade-logs/page": "app/trade-logs/page.js"
 }
