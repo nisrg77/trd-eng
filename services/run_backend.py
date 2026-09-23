@@ -245,12 +245,26 @@ def main() -> None:
                 # 4. OMS Execution
                 if evaluated_order["risk_state"] == "APPROVED":
                     evaluated_order = oms.submit_order(evaluated_order, current_prices[instr], obi_rho=obi_rho)
+                    write_execution_log(evaluated_order)
                 else:
                     evaluated_order["timestamp_executed"] = time.time()
                     evaluated_order["oms_state"] = "SKIPPED_BY_RISK"
                     log.warning("  ! %-10s  Order REJECTED by Risk Guard: %s", instr, evaluated_order.get("failed_check"))
-                    
-                write_execution_log(evaluated_order)
+                    # Store rejected trade in MongoDB only (not on dashboard UI)
+                    try:
+                        from middleware.db_manager import mongo_db
+                        if mongo_db.is_connected():
+                            mongo_db.save_gate_rejection({
+                                "instrument": instr,
+                                "asset_class": asset_class,
+                                "gate": evaluated_order.get("failed_check", "RISK_GUARD"),
+                                "reason": evaluated_order.get("failed_check", ""),
+                                "final_action": "REJECTED",
+                                "signal_direction": signal.get("direction_magnitude", 0.0),
+                                "effective_conviction": signal.get("conviction_score", 0.0),
+                            })
+                    except Exception:
+                        pass
                 
             except Exception as exc:
                 log.error("  ✗ %s: %s", instr, exc, exc_info=True)

@@ -95,6 +95,12 @@ class SimulatedFuturesOMS:
         with _lock:
             with open(_STATE_FILE, "w") as f:
                 json.dump(state, f, indent=2)
+            try:
+                from middleware.db_manager import mongo_db
+                if mongo_db.is_connected():
+                    mongo_db.save_account(state)
+            except Exception:
+                pass
 
     def update_prices(self, current_prices: dict[str, float], atr_values: dict[str, float] = None):
         """

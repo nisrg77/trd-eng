@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTradingStore } from '@/store/useTradingStore';
+import { getApiBaseUrl } from '@/lib/utils';
 
 interface StockCandidate {
   rank: number;
@@ -26,9 +27,10 @@ export const StockScreenerCard: React.FC = () => {
   const fetchScreenerData = useCallback(async (force: boolean = false) => {
     try {
       setIsLoading(true);
+      const baseUrl = getApiBaseUrl();
       const url = force
-        ? 'http://localhost:8000/api/screener/refresh'
-        : 'http://localhost:8000/api/screener/top-stocks';
+        ? `${baseUrl}/api/screener/refresh`
+        : `${baseUrl}/api/screener/top-stocks`;
       
       const res = await fetch(url, force ? { method: 'POST' } : { method: 'GET' });
       if (res.ok) {

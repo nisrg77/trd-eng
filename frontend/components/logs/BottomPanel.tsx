@@ -9,7 +9,9 @@ export const BottomPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'positions' | 'executions' | 'signals' | 'logs'>('positions');
 
   const account = useTradingStore((state) => state.account);
-  const executions = useTradingStore((state) => state.executions);
+  const executions = useTradingStore((state) => state.executions).filter(
+    (ex) => ex.risk_state !== 'REJECTED' && ex.oms_state !== 'SKIPPED_BY_RISK'
+  );
   const signals = useTradingStore((state) => state.signals);
   const logs = useTradingStore((state) => state.logs);
 

@@ -29,6 +29,8 @@ files = {
     },
     "signals_store.json": {},
     "execution_store.json": [],
+    "screener_cache.json": {},
+    "screener_targets.json": {},
 }
 
 for fname, content in files.items():

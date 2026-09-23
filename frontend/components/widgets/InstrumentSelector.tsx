@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useTradingStore } from '@/store/useTradingStore';
+import { getApiBaseUrl } from '@/lib/utils';
 
 const CORE_SYMBOLS = ['BTC-USD', 'ETH-USD', 'SPY', 'AAPL'];
 
@@ -44,7 +45,7 @@ export const InstrumentSelector: React.FC = () => {
     const timer = setTimeout(async () => {
       try {
         setIsSearching(true);
-        const res = await fetch(`http://localhost:8000/api/stocks/search?q=${encodeURIComponent(query)}`);
+        const res = await fetch(`${getApiBaseUrl()}/api/stocks/search?q=${encodeURIComponent(query)}`);
         if (res.ok) {
           const data = await res.json();
           setResults(data.results || []);

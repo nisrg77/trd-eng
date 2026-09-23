@@ -36,14 +36,13 @@ export const TradeLogsTable: React.FC = () => {
     { key: 'all',      label: 'All markets'    },
     { key: 'us',       label: 'US only'        },
     { key: 'crypto',   label: 'Crypto only'    },
-    { key: 'rejected', label: 'Rejected only'  },
   ];
 
   const filtered = useMemo(() => {
-    let rows = [...executions];
+    // Hide rejected trades from UI per user requirement (saved in DB only)
+    let rows = executions.filter((r) => r.risk_state !== 'REJECTED' && r.oms_state !== 'SKIPPED_BY_RISK');
     if (filter === 'us')       rows = rows.filter((r) => !isCrypto(r.instrument));
     if (filter === 'crypto')   rows = rows.filter((r) =>  isCrypto(r.instrument));
-    if (filter === 'rejected') rows = rows.filter((r) =>  r.risk_state === 'REJECTED');
     rows.sort((a, b) => {
       const va = (a as any)[sortKey];
       const vb = (b as any)[sortKey];

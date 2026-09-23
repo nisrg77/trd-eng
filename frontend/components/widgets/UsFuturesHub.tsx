@@ -1,7 +1,8 @@
-﻿'use client';
+'use client';
 
 import React, { useEffect, useState } from 'react';
 import { useTradingStore } from '@/store/useTradingStore';
+import { getApiBaseUrl } from '@/lib/utils';
 
 interface StockCandidate {
   rank: number;
@@ -51,7 +52,7 @@ export const UsFuturesHub: React.FC = () => {
   const fetchCandidates = async () => {
     try {
       setLoading(true);
-      const res = await fetch('http://localhost:8000/api/screener/top-stocks');
+      const res = await fetch(`${getApiBaseUrl()}/api/screener/top-stocks`);
       if (res.ok) setScreenerData(await res.json());
     } catch (err) { console.error('Failed to load screener candidates:', err); }
     finally { setLoading(false); }

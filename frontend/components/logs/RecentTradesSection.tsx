@@ -30,8 +30,9 @@ export const RecentTradesSection: React.FC<RecentTradesSectionProps> = ({ market
 
   const filtered = useMemo(() => {
     return executions.filter((ex) =>
-      market === 'crypto' ? isCrypto(ex.instrument) : !isCrypto(ex.instrument)
-    ).slice(0, 20); // show latest 20
+      ex.risk_state !== 'REJECTED' && ex.oms_state !== 'SKIPPED_BY_RISK' &&
+      (market === 'crypto' ? isCrypto(ex.instrument) : !isCrypto(ex.instrument))
+    ).slice(0, 20); // show latest 20 executed trades
   }, [executions, market]);
 
   const badgeCls  = market === 'us' ? 'blue' : 'cyan';

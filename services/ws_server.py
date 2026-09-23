@@ -224,6 +224,16 @@ def get_decision_traces(limit: int = 100):
     from core.decision_trace import decision_trace_buffer
     return {"traces": decision_trace_buffer.get_recent_traces(limit=limit)}
 
+@app.post("/api/reset-paper-trading")
+def reset_paper_trading_api():
+    try:
+        import subprocess
+        script_path = os.path.join(BASE_DIR, "scripts", "reset_paper_trading.py")
+        result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+        return {"status": "success", "message": "Paper trading state successfully reset to $1000 equity.", "output": result.stdout}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.websocket("/ws/trading")
 async def websocket_endpoint(websocket: WebSocket, symbol: str = "BTC-USD"):
     await websocket.accept()
