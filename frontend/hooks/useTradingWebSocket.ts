@@ -22,9 +22,10 @@ function normalizeExecution(ex: any) {
 }
 
 export const useTradingWebSocket = () => {
-  // Dynamically get the host so it works when deployed on AWS (not just localhost)
+  // Dynamically get the host or use Vercel environment variable
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const url = `ws://${host}:8000/ws/trading`;
+  const defaultUrl = `ws://${host}:8000/ws/trading`;
+  const url = process.env.NEXT_PUBLIC_WS_URL || defaultUrl;
   const wsRef = useRef<WebSocket | null>(null);
   const {
     selectedSymbol,
