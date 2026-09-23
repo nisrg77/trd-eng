@@ -80,6 +80,11 @@ def _read_exec_raw() -> list:
         return []
     try:
         with open(_EXEC_STORE_PATH, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+        # Guard: if file was corrupted/old format (dict instead of list), reset cleanly
+        if not isinstance(data, list):
+            return []
+        return data
     except Exception:
         return []
+
