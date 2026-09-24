@@ -19,6 +19,7 @@ class MongoDatabaseManager:
         self.client = None
         self.db = None
         self.connected = False
+        self._in_memory_strategies: Dict[str, Dict[str, Any]] = {}
         self._init_connection()
 
     def _init_connection(self):
@@ -336,6 +337,81 @@ class MongoDatabaseManager:
         except Exception as e:
             log.error(f"[MongoDB] Error querying screener cache: {e}")
             return None
+
+    # ── Strategies Collection & Hot-Reloading ────────────────────────────────
+    def save_strategy(self, strategy_data: Dict[str, Any]) -> bool:
+        """Saves or updates a strategy document."""
+        strat_id = strategy_data.get("strategy_id")
+        if not strat_id:
+            return False
+
+        doc = dict(strategy_data)
+        doc["updated_at"] = time.time()
+        self._in_memory_strategies[strat_id] = doc
+
+        if not self.connected or self.db is None:
+            return True
+
+        try:
+            self.db["strategies"].update_one(
+                {"strategy_id": strat_id},
+                {"$set": doc},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            log.error(f"[MongoDB] Error saving strategy {strat_id}: {e}")
+            return False
+
+    def get_strategy(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a strategy document by ID."""
+        if self.connected and self.db is not None:
+            try:
+                doc = self.db["strategies"].find_one({"strategy_id": strategy_id}, {"_id": 0})
+                if doc:
+                    return doc
+            except Exception as e:
+                log.error(f"[MongoDB] Error querying strategy {strategy_id}: {e}")
+
+        return self._in_memory_strategies.get(strategy_id)
+
+    def list_strategies(self, asset_class: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Lists all registered strategies, optionally filtered by asset class."""
+        if self.connected and self.db is not None:
+            try:
+                query = {}
+                if asset_class:
+                    query["asset_class"] = asset_class.lower()
+                cursor = self.db["strategies"].find(query, {"_id": 0})
+                return list(cursor)
+            except Exception as e:
+                log.error(f"[MongoDB] Error listing strategies: {e}")
+
+        # Fallback to in-memory
+        res = list(self._in_memory_strategies.values())
+        if asset_class:
+            ac_lower = asset_class.lower()
+            res = [s for s in res if s.get("asset_class", "").lower() == ac_lower]
+        return res
+
+    def update_strategy_params(self, strategy_id: str, new_params: Dict[str, Any]) -> bool:
+        """Hot-reloads hyperparameters for a strategy."""
+        strat = self.get_strategy(strategy_id)
+        if not strat:
+            return False
+
+        params = strat.get("parameters", {})
+        params.update(new_params)
+        strat["parameters"] = params
+        return self.save_strategy(strat)
+
+    def update_strategy_status(self, strategy_id: str, new_status: str) -> bool:
+        """Updates status ('active' | 'inactive') for a strategy."""
+        strat = self.get_strategy(strategy_id)
+        if not strat:
+            return False
+        strat["status"] = new_status
+        return self.save_strategy(strat)
 
 # Global singleton database manager instance
 mongo_db = MongoDatabaseManager()

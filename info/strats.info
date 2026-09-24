@@ -1,0 +1,133 @@
+# TRDENG Strategy Catalogue & Execution Governance
+================================================================================
+Document: info/strats.info
+Status: ACTIVE / PRODUCTION-SPEC
+Architecture: TRDENG Multi-Sleeve Execution Framework (v4.2.8)
+================================================================================
+
+1. PORTFOLIO SLEEVE ARCHITECTURE
+--------------------------------------------------------------------------------
+TRDENG allocates portfolio capital across two non-correlated asset sleeves:
+
++-----------------------------+-------------------+---------------+-------------------+
+| Sleeve Name                 | Capital Share     | Initial Cap   | Daily Quota Limit |
++-----------------------------+-------------------+---------------+-------------------+
+| Crypto Perpetuals Sleeve    | 20% NAV           | $200.00 USD   | 20 round-trips/day|
+| US Equities / Futures Sleeve| 80% NAV           | $800.00 USD   | 80 round-trips/day|
++-----------------------------+-------------------+---------------+-------------------+
+Total Base Portfolio: $1,000.00 USD | Total Daily Trade Ceiling: 100 Trades Max / Day (Resets Daily at 00:00 UTC)
+
+
+2. CRYPTO PERPETUALS SLEEVE SPECIFICATION (24/7 SESSION)
+--------------------------------------------------------------------------------
+Primary Instruments: BTC-USD, ETH-USD, SOL-USD, BTCUSDT.P, ETHUSDT.P
+Execution Exchange: Binance Perpetuals (via CCXT Gateway / Simulated 10x OMS)
+
+STRATEGY CP-01: NFI Predictive Trend Breakout
+  - Concept: High-conviction directional trend capture triggered by order flow
+    exhaustion and structural volume breakout.
+  - Entry Trigger (LONG):
+      1. Close > 20-period Highest High on 5-minute candle.
+      2. Cumulative Volume Delta (CVD) Z-score >= +1.50.
+      3. Order Book Imbalance (OBI) > +0.25 on top 5 bid/ask tiers.
+      4. HMM Regime in {State 0: Bull Trend}.
+  - Exit Rules:
+      - Stop-Loss: Entry - 2.0 * ATR_{14} (hard risk capped at <= $10 USD).
+      - Take-Profit 1: Entry + 1.5 * Delta_SL (50% position de-risk).
+      - Take-Profit 2: Trailing VPOC migration until trend exhaustion.
+  - Quota Consumption: 1 credit per round-trip.
+
+STRATEGY CP-02: Perpetual Funding Rate Arbitrage (Predictive Carry)
+  - Concept: Delta-neutral or directional carry harvesting on extreme funding rates.
+  - Entry Trigger:
+      - Predicted 8-Hour Funding Rate > +0.0300% (Longs heavily paying Shorts)
+        -> Open Short Perpetual hedge against spot or enter funding harvest.
+      - Predicted 8-Hour Funding Rate < -0.0150% (Shorts paying Longs at discount)
+        -> Open Long Perpetual discount harvest.
+  - Holding Horizon: Minimum 1 funding epoch (8 hours) until funding normalizes (|rate| < 0.005%).
+  - Risk Budget: Notional <= $200, Stop-Loss triggered if price adverse excursion > 1.8 * ATR_{14}.
+
+STRATEGY CP-03: Volatility Squeeze Expansion
+  - Concept: Breakout following volatility compression within Bollinger / Keltner bands.
+  - Entry Trigger:
+      - Bollinger Bandwidth (20, 2.0) falls below 10th percentile of 30-day distribution.
+      - First expansion bar closes outside bands with RVOL >= 2.0x.
+  - Guard: Suppressed if P10 Dead-Day filter is active.
+
+
+3. US EQUITIES & SINGLE STOCK FUTURES SLEEVE (RTH 09:30 - 16:00 ET)
+--------------------------------------------------------------------------------
+Primary Instruments: Top liquid tickers scanned via TradingView 15-Min Screener
+(e.g., NVDA, AAPL, SPY, TSLA, AMD, MSFT, META)
+Execution Gateway: CME SSF / Alpaca / Interactive Brokers (Simulated 10x Margin)
+
+STRATEGY US-01: 15-Minute Opening Range Breakout (ORB)
+  - Concept: Capitalize on institutional order imbalances during regular trading hours.
+  - Execution Time Window: 09:45 ET to 11:30 ET (after initial 15-minute range formation).
+  - Setup:
+      1. Establish 15-minute Opening Range: High_{15m} and Low_{15m} (09:30 - 09:45 ET).
+      2. Relative Volume (RVOL) on the day >= 1.50x historical 20-day benchmark.
+  - Entry Trigger (LONG):
+      - 5-minute candle closes strictly above High_{15m} + 0.10 * ATR_{14}.
+      - Market breadth / SPY correlation positive (SPY > VWAP).
+  - Entry Trigger (SHORT):
+      - 5-minute candle closes strictly below Low_{15m} - 0.10 * ATR_{14}.
+      - SPY < VWAP.
+  - Exit Rules:
+      - Stop-Loss: Set at Opening Range Midpoint or Entry - 1.5 * ATR (Risk <= $10 USD).
+      - Target: 2.0x R-multiple. All day positions closed before 15:55 ET (No overnight gap risk).
+
+STRATEGY US-02: 15-Min Screener RVOL & Sector Momentum
+  - Concept: Systematic rotation into top 5 ranked momentum leaders from the screener.
+  - Ranking Criteria:
+      Rank_Score = 0.50 * Z_{7d_momentum} + 0.35 * Z_{RVOL} + 0.15 * (1 / Volatility)
+  - Filter: Stock price > $15, Average Daily Volume > 1,500,000 shares.
+  - Gating: Re-evaluated on each 15-minute screener refresh cycle.
+
+STRATEGY US-03: Intraday VWAP Mean Reversion (Ornstein-Uhlenbeck)
+  - Concept: Statistical mean reversion to VWAP when price is over-extended in chop regimes.
+  - Regime Prerequisite: HMM in {State 2: Chop / Range-Bound}.
+  - Entry Trigger:
+      - |Price - VWAP| / (Standard Deviation of VWAP) >= 2.20 sigma.
+      - RSI-9 in extreme zone (< 25 for Long, > 75 for Short).
+  - Target: Return to VWAP line (Z-score <= 0.20).
+
+
+4. STRATEGY PROMOTION & GOVERNANCE PIPELINE
+--------------------------------------------------------------------------------
+Strategies advance through three standardized maturity tiers:
+
+  [STAGE 1: BACKTEST & WALK-FORWARD]
+    - 3-year historical out-of-sample data.
+    - Walk-forward efficiency ratio (WFER) >= 60%.
+    - Maximum backtest drawdown <= 12%.
+
+  [STAGE 2: PAPER SOAK VALIDATION (CURRENT)]
+    - Continuous execution via `scripts/run_paper_soak.py` and simulated 10x OMS.
+    - Minimum requirement: 100 consecutive paper trades.
+    - Realized Sharpe Ratio >= 1.75.
+    - Profit Factor >= 1.60.
+    - Zero risk limit breaches or circuit breaker trips.
+
+  [STAGE 3: LIVE PRODUCTION DEPLOYMENT]
+    - Capital allocation scaled in 25% increments:
+      Week 1-2: 25% ($250 NAV)
+      Week 3-4: 50% ($500 NAV)
+      Week 5+: 100% ($1,000 NAV)
+
+
+5. EXECUTION GATES & GOVERNANCE RULES
+--------------------------------------------------------------------------------
+1. Active 80/20 Daily Trade Rule:
+   - Crypto Perpetuals: Strictly capped at 20 trades/day.
+   - US Equities: Strictly capped at 80 trades/day.
+   - Resets automatically at 00:00 UTC each day.
+2. Total Capital Depletion Stop ($1,000 Exhaustion):
+   - If cumulative portfolio losses reach -$1,000.00 USD (entire $1,000 capital finished),
+     the system halts completely (`engine_paused = True`) and blocks all new entries.
+3. Disabled Execution Gates:
+   - All other secondary gating hurdles (dead-day filter suppression, zero conviction gates,
+     micro-volatility drawdowns) in the goal module are DISABLED per specification.
+4. Heartbeat & Liveness Safety:
+   - If WebSocket latency > 500ms or 3 consecutive heartbeats are missed, the engine
+     aborts order placement and logs an urgent alert to the terminal.

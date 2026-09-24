@@ -32,6 +32,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
+from core.patch_helpers import frac_diff_ffd, compute_daily_vol, true_atr
 
 warnings.filterwarnings("ignore")
 logging.basicConfig(
@@ -57,34 +58,7 @@ def _get_weights(d: float, size: int, threshold: float = 1e-5) -> np.ndarray:
 
 
 def frac_diff(series: pd.Series, d: float = 0.4, is_us_futures: bool = False) -> pd.Series:
-    """
-    Fractionally-differentiated price series.
-    If is_us_futures=True, pauses decay across weekend gaps (>48h) to prevent artificial volatility spikes.
-    """
-    weights = _get_weights(d, len(series))
-    result = np.full(len(series), np.nan)
-    w_len = len(weights)
-    
-    if is_us_futures and isinstance(series.index, pd.DatetimeIndex):
-        # Session-aware gap detection
-        time_diffs = series.index.to_series().diff()
-        gap_mask = time_diffs > pd.Timedelta(hours=48)
-        
-        for i in range(w_len - 1, len(series)):
-            # If a weekend gap occurred in the lookback window, pause decay weight
-            window = series.iloc[i - w_len + 1: i + 1].values
-            if gap_mask.iloc[i - w_len + 1: i + 1].any():
-                # Session-aware adjusted window
-                adj_weights = weights.copy()
-                result[i] = np.dot(adj_weights, window)
-            else:
-                result[i] = np.dot(weights, window)
-    else:
-        for i in range(w_len - 1, len(series)):
-            window = series.iloc[i - w_len + 1: i + 1].values
-            result[i] = np.dot(weights, window)
-            
-    return pd.Series(result, index=series.index)
+    return frac_diff_ffd(series, d, max_width=getattr(config, "FRAC_DIFF_MAX_WIDTH", 100))
 
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
@@ -108,44 +82,44 @@ def compute_obi(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
 
 
 def _build_payload(df: pd.DataFrame, instrument: str) -> dict:
-    """Shared payload builder — same for Alpaca and Binance data."""
-    close = df["Close"]
-    high  = df["High"]
-    low   = df["Low"]
+    live = df.iloc[-1]                                   # newest bar (may be forming): prices/marks only
+    if (getattr(config, "USE_CLOSED_BARS", False)
+            and df.attrs.get("last_bar_open", False) and len(df) > 30):
+        df = df.iloc[:-1]                                # features / labels / dead-day see CLOSED bars
 
+    close, high, low = df["Close"], df["High"], df["Low"]
     is_us_fut = instrument in ["AAPL", "SPY"]
-    fd  = frac_diff(close, config.FRAC_DIFF_D, is_us_futures=is_us_fut)
-    vol = compute_garch_vol(close, config.VOL_WINDOW)
-    rsi = compute_rsi(close, config.RSI_PERIOD)
-    obi = compute_obi(high, low, close)
+
+    fd   = frac_diff(close, config.FRAC_DIFF_D, is_us_futures=is_us_fut)
+    vol  = compute_garch_vol(close, config.VOL_WINDOW)     # annualized (API unchanged)
+    dvol = compute_daily_vol(close, config.VOL_WINDOW)     # = vol / sqrt(252)
+    atr  = true_atr(df, 14)                                # price units
+    rsi  = compute_rsi(close, config.RSI_PERIOD)
+    obi  = compute_obi(high, low, close)
 
     def last(s: pd.Series) -> float:
         v = s.dropna()
         return float(v.iloc[-1]) if not v.empty else 0.0
 
     return {
-        "timestamp":  datetime.now(timezone.utc).timestamp(),
+        "timestamp": datetime.now(timezone.utc).timestamp(),
         "instrument": instrument,
         "features": {
-            "frac_diff_price_1d":    round(last(fd),  6),
-            "garch_vol":             round(last(vol), 6),
-            "order_book_imbalance":  round(last(obi), 4),
-            "rsi_14":                round(last(rsi), 2),
+            "frac_diff_price_1d": round(last(fd), 6),
+            "garch_vol": round(last(vol), 6),
+            "garch_vol_daily": round(last(dvol), 6),
+            "atr_14": round(last(atr), 6),
+            "order_book_imbalance": round(last(obi), 4),
+            "rsi_14": round(last(rsi), 2),
         },
         "ohlcv": {
-            "open":   round(float(df["Open"].iloc[-1]),   4),
-            "high":   round(float(df["High"].iloc[-1]),   4),
-            "low":    round(float(df["Low"].iloc[-1]),    4),
-            "close":  round(float(df["Close"].iloc[-1]),  4),
-            "volume": float(df["Volume"].iloc[-1]),
+            "open": round(float(live["Open"]), 4), "high": round(float(live["High"]), 4),
+            "low": round(float(live["Low"]), 4), "close": round(float(live["Close"]), 4),
+            "volume": float(live["Volume"]),
         },
-        "_close_history":   close.tolist(),
-        "_feature_history": {
-            "frac_diff": fd.tolist(),
-            "garch_vol": vol.tolist(),
-            "obi":       obi.tolist(),
-            "rsi_14":    rsi.tolist(),
-        },
+        "_close_history": close.tolist(),
+        "_feature_history": {"frac_diff": fd.tolist(), "garch_vol": vol.tolist(),
+                             "obi": obi.tolist(), "rsi_14": rsi.tolist()},
         "_df": df,
     }
 
@@ -288,6 +262,7 @@ class BinanceFeed:
         df.index = pd.to_datetime(df["open_time"], unit="ms", utc=True)
         df = df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
         df = df.sort_index()
+        df.attrs["last_bar_open"] = bool(rows[-1][6] > end_ms)   # kline close_time still in the future
         log.info("  Binance %-10s  %d bars  last_close=%.4f",
                  instrument, len(df), df["Close"].iloc[-1])
         return df

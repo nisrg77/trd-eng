@@ -1,0 +1,80 @@
+erDiagram
+    STRATEGIES ||--o{ SIGNALS : generates
+    STRATEGIES ||--o{ TRADES : owns
+    STRATEGIES ||--o{ POSITIONS : executes
+    SIGNALS ||--o| GATE_REJECTIONS : evaluated_by
+    SIGNALS ||--o| DECISION_TRACES : audited_by
+    ACCOUNTS ||--o{ POSITIONS : holds
+    ACCOUNTS ||--|| QUOTA_STATE : constrained_by
+    POSITIONS ||--o| TRADES : mutates_to
+
+    STRATEGIES {
+        string strategy_id PK
+        string name
+        string asset_class
+        string status
+        json parameters
+        float allocation_weight
+        json performance
+    }
+    SIGNALS {
+        string signal_id PK
+        string strategy_id FK
+        string symbol
+        float direction
+        float conviction
+        timestamp created_at
+    }
+    TRADES {
+        string trade_id PK
+        string strategy_id FK
+        string symbol
+        string side
+        float size
+        float fill_price
+        float exit_price
+        float realized_pnl
+        timestamp opened_at
+        timestamp closed_at
+    }
+    POSITIONS {
+        string symbol PK
+        string trade_id FK
+        string strategy_id FK
+        string side
+        float size
+        float entry_price
+        float mark_price
+        float unrealized_pnl
+        float leverage
+    }
+    ACCOUNTS {
+        string account_id PK
+        float balance
+        float equity
+        float unrealized_pnl
+        float realized_pnl_today
+        float margin_used
+    }
+    QUOTA_STATE {
+        string quota_id PK
+        float realized_pnl_this_month
+        int crypto_trades_today
+        int stock_trades_today
+        bool engine_paused
+        string last_reset_day
+    }
+    GATE_REJECTIONS {
+        string rejection_id PK
+        string signal_id FK
+        string gate_name
+        string reason
+        timestamp rejected_at
+    }
+    DECISION_TRACES {
+        string trace_id PK
+        string symbol
+        json features
+        json model_predictions
+        string regime
+    }

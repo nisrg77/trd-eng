@@ -1,1 +1,68 @@
-[]
+[
+  {
+    "order_id": "sim_exit_25bfcc86",
+    "instrument": "SOL-USD",
+    "action": "SELL",
+    "qty": 1.3333333333333335,
+    "price": 160.0,
+    "oms_state": "FILLED",
+    "realized_pnl": 12.25,
+    "reason": "TP1_+1_SIGMA",
+    "timestamp": 1790272915.9979496
+  },
+  {
+    "order_id": "sim_exit_738bd132",
+    "instrument": "SOL-USD",
+    "action": "SELL",
+    "qty": 2.0,
+    "price": 100.0,
+    "oms_state": "FILLED",
+    "realized_pnl": -101.1,
+    "reason": "ATR_TRAILING_STOP",
+    "timestamp": 1790272916.25269
+  },
+  {
+    "order_id": "sim_exit_c921d38b",
+    "instrument": "SOL-USD",
+    "action": "SELL",
+    "qty": 1.3333333333333335,
+    "price": 160.0,
+    "oms_state": "FILLED",
+    "realized_pnl": 12.25,
+    "reason": "TP1_+1_SIGMA",
+    "timestamp": 1790272953.3379743
+  },
+  {
+    "order_id": "sim_exit_1aa6ff37",
+    "instrument": "SOL-USD",
+    "action": "SELL",
+    "qty": 2.0,
+    "price": 100.0,
+    "oms_state": "FILLED",
+    "realized_pnl": -101.1,
+    "reason": "ATR_TRAILING_STOP",
+    "timestamp": 1790272953.6213841
+  },
+  {
+    "order_id": "sim_exit_43045a23",
+    "instrument": "SOL-USD",
+    "action": "SELL",
+    "qty": 1.3333333333333335,
+    "price": 160.0,
+    "oms_state": "FILLED",
+    "realized_pnl": 12.25,
+    "reason": "TP1_+1_SIGMA",
+    "timestamp": 1790273991.4784799
+  },
+  {
+    "order_id": "sim_exit_a36c8487",
+    "instrument": "SOL-USD",
+    "action": "SELL",
+    "qty": 2.0,
+    "price": 100.0,
+    "oms_state": "FILLED",
+    "realized_pnl": -101.1,
+    "reason": "ATR_TRAILING_STOP",
+    "timestamp": 1790273991.7239919
+  }
+]

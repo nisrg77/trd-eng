@@ -1,0 +1,254 @@
+================================================================================
+TRDENG REINFORCEMENT LEARNING (RL) MODULE — USER GUIDE & SPECIFICATION
+================================================================================
+
+1. OVERVIEW & ARCHITECTURAL INVARIANTS
+--------------------------------------------------------------------------------
+The RL Subsystem in TRDENG implements an offline-trained, frozen ONNX inference
+policy that operates inside the live trading kernel STRICTLY IN SHADOW MODE.
+
+Core Safety Rules:
+- STRICT DEPENDENCY ISOLATION:
+  * Training code lives ONLY in `research/rl/` (PyTorch, Stable-Baselines3, Gymnasium).
+  * Live kernel (`strategies/ai/onnx_policy_plugin.py`) imports ONLY `onnxruntime` and `numpy`.
+  * NO PyTorch, SB3, or Gym dependencies in the live engine.
+- ZERO LOOKAHEAD TIMING:
+  * Decision is computed at bar t close (using only data up to bar t).
+  * Hypothetical order fill occurs at bar t+1 open.
+- SHADOW MODE DEFAULT:
+  * Signals are logged to `decision_trace.jsonl` with tag `"rl_shadow"`.
+  * `evaluate()` returns `None`, guaranteeing ZERO live orders are sent to brokers.
+- IMMUTABLE GOVERNANCE:
+  * Feature-schema hash (16-char SHA-256) is verified at startup.
+  * Weight tampering or schema drift immediately halts policy loading.
+
+
+2. DIRECTORY STRUCTURE
+--------------------------------------------------------------------------------
+TRDENG/
+├── research/
+│   ├── quant-trading/                  <-- Quant strategies repository
+│   └── rl/
+│       ├── trading_env.py              <-- Cost-aware Gymnasium Environment (12-dim)
+│       ├── quant_strategy_bridge.py    <-- Bridge to quant-trading strategies (Dual Thrust, AO, etc.)
+│       ├── train_rl.py                 <-- Purged Walk-Forward PPO Trainer & Benchmarking
+│       ├── export_onnx.py              <-- PyTorch Actor -> ONNX Model & Metadata Exporter
+│       └── runs/                       <-- Saved training runs, artifacts, and ONNX models
+├── strategies/
+│   └── ai/
+│       ├── __init__.py                 <-- Exports ONNXPolicyPlugin & ShadowPnLTracker
+│       └── onnx_policy_plugin.py       <-- Sub-millisecond live ONNX inference plugin
+├── execution/
+│   └── cost_model.py                   <-- Institutional transaction cost model
+└── middleware/
+    └── strategy_promotion.py           <-- Staged governance & paper soak evaluation
+
+
+3. INPUTS & OUTPUTS (INP / OP)
+--------------------------------------------------------------------------------
+
+A. INPUT DATA (Market OHLCV Dataframe):
+   Required columns for feature extraction:
+   - timestamp : Epoch seconds or datetime
+   - open      : Bar open price (float)
+   - high      : Bar high price (float)
+   - low       : Bar low price (float)
+   - close     : Bar close price (float)
+   - volume    : Bar trading volume (float)
+
+B. RL OBSERVATION VECTOR (12-Dimensional State Space s_t in R^12):
+   Features are standardized using training-set mean and standard deviation:
+   [0] log_ret_1          : 1-bar log return (log(Close_t / Close_{t-1}))
+   [1] log_ret_3          : 3-bar log return
+   [2] log_ret_5          : 5-bar log return
+   [3] log_ret_12         : 12-bar log return
+   [4] rsi_14_centered    : (RSI_14 - 50) / 50.0  [-1.0 to +1.0]
+   [5] bb_dist_atr        : (Close - Bollinger_Middle) / ATR_14
+   [6] bb_width_atr       : (Bollinger_Upper - Bollinger_Lower) / ATR_14
+   [7] adx_14_centered    : (ADX_14 - 25) / 25.0
+   [8] realized_vol_20    : 20-bar rolling standard deviation of log returns
+   [9] current_position   : Current position state (-1.0 = Short, 0.0 = Flat, +1.0 = Long)
+   [10] unrealized_pnl_atr: Unrealized PnL in ATR units: (Price - EntryPrice) * Pos / ATR
+   [11] bars_in_trade_norm: Normalized duration in trade: min(1.0, bars / 50.0)
+
+C. OUTPUT ACTION SPACE (Discrete(3)):
+   Action 0 = SHORT (-1.0 target position)
+   Action 1 = FLAT  ( 0.0 target position)
+   Action 2 = LONG  (+1.0 target position)
+
+D. PRODUCED TRAINING ARTIFACTS:
+   1. `model.onnx`: Frozen neural network actor (input: `observation` [batch, 12], output: `logits` [batch, 3]).
+   2. `model_meta.json`: Provenance metadata containing:
+      - `feature_schema_hash`: 16-character SHA-256 hash of expected feature names.
+      - `training_config_hash`: SHA-256 hash of training hyperparameters.
+      - `normalization_stats`: Per-feature mean and std fitted strictly on train split.
+      - `git_commit_hash`: Git version provenance.
+      - `seed`: Random seed used for training.
+   3. `run_summary.json`: Walk-forward performance, baseline comparisons, and DSR.
+
+
+4. QUANT-TRADING STRATEGY INTEGRATION
+--------------------------------------------------------------------------------
+The bridge module `research/rl/quant_strategy_bridge.py` connects classic quantitative
+strategies from `research/quant-trading/` directly into the RL pipeline:
+
+Integrated Strategies:
+1. Dual Thrust Breakout (`QuantStrategyBridge.dual_thrust_signals`):
+   Michael Chalek opening range breakout.
+2. Awesome Oscillator (`QuantStrategyBridge.awesome_oscillator_signals`):
+   Bill Williams momentum zero-cross filter.
+3. Heikin-Ashi Trend (`QuantStrategyBridge.heikin_ashi_signals`):
+   Modified candlestick trend smoothing.
+4. RSI Pattern Recognition (`QuantStrategyBridge.rsi_pattern_signals`):
+   Multi-bar momentum reversal signals.
+
+How RL Uses Them:
+- Multi-Baseline Benchmarking: Every RL fold is benchmarked against all 8 baselines
+  (Flat, Buy & Hold, Random, Bollinger Reversion, Dual Thrust, Awesome Oscillator,
+  Heikin-Ashi, RSI Pattern) under identical transaction costs.
+- Deflated Sharpe Ratio (DSR): Proves statistically that the RL model is not
+  snooping and genuinely generates excess alpha beyond simple rule-based algorithms.
+
+
+5. STEP-BY-STEP USAGE WORKFLOW
+--------------------------------------------------------------------------------
+
+STEP 1: TRAIN RL POLICY OFFLINE
+Run walk-forward PPO training across purged splits:
+```python
+import pandas as pd
+from research.rl.train_rl import run_walk_forward_training, TrainRLConfig
+
+# 1. Load historical data
+df = pd.read_parquet("data/BTC_USDT_1h.parquet")  # or pd.read_csv(...)
+
+# 2. Configure training
+cfg = TrainRLConfig(
+    symbol="BTC-USD",
+    n_folds=3,
+    seeds=[42, 43, 44, 45, 46],
+    embargo_bars=20,
+    total_timesteps=10000,
+    min_holding_bars=3,
+    output_dir="research/rl/runs"
+)
+
+# 3. Execute walk-forward training & baseline benchmarking
+results = run_walk_forward_training(df, config=cfg)
+print(f"Overall Verdict: {results['verdict']}")
+print(f"Deflated Sharpe Ratio: {results['summary_metrics']['overall_dsr']}")
+```
+
+STEP 2: EXPORT FROZEN ONNX MODEL
+Export the trained PyTorch actor to an ONNX file with schema metadata:
+```python
+from research.rl.export_onnx import export_trained_policy_to_onnx
+
+export_trained_policy_to_onnx(
+    sb3_model_path="research/rl/runs/run_XXXXX/fold_0/model_seed_42.zip",
+    normalizer_path="research/rl/runs/run_XXXXX/fold_0/normalizer.json",
+    output_onnx_path="model_weights/rl_btc_v1.onnx",
+    symbol="BTC-USD",
+    seed=42
+)
+# Creates:
+# - model_weights/rl_btc_v1.onnx
+# - model_weights/rl_btc_v1_meta.json
+```
+
+STEP 3: REGISTER IN PROMOTION GOVERNANCE
+Register the model in StrategyPromotionManager (starts at RESEARCH stage):
+```python
+from middleware.strategy_promotion import promotion_manager
+
+record = promotion_manager.register_rl_candidate(
+    strategy_id="rl_btc_v1",
+    name="RL PPO BTC Momentum",
+    asset_class="crypto",
+    onnx_model_path="model_weights/rl_btc_v1.onnx",
+    meta_path="model_weights/rl_btc_v1_meta.json",
+    params={"min_holding_bars": 3, "allocation_usd": 1000.0}
+)
+print(f"Registered at stage: {record['stage']}")  # RESEARCH
+```
+
+STEP 4: RUN IN LIVE SHADOW MODE
+Instantiate the ONNX plugin and register it in TRDENG's StrategyRegistry:
+```python
+from strategies.strategy_registry import strategy_registry
+from strategies.ai.onnx_policy_plugin import ONNXPolicyPlugin, shadow_pnl_tracker
+
+# Instantiate plugin (shadow_mode=True by default)
+rl_plugin = ONNXPolicyPlugin(
+    strategy_id="rl_btc_v1",
+    name="RL PPO BTC Momentum",
+    asset_class="crypto",
+    onnx_model_path="model_weights/rl_btc_v1.onnx",
+    shadow_mode=True,               # <--- CRITICAL: Guaranteed zero live orders
+    sleeve_id="sleeve_ai_shadow"
+)
+
+# Register in TRDENG strategy registry
+strategy_registry.register(rl_plugin)
+
+# Engine automatically evaluates plugin on each live bar:
+# - Sub-millisecond inference (<0.2ms)
+# - Logs diagnostic trace to decision_trace.jsonl with tag "rl_shadow"
+# - Hypothetical PnL tracked via shadow_pnl_tracker
+```
+
+STEP 5: EVALUATE SHADOW PERFORMANCE FOR PROMOTION
+Once the policy runs in shadow mode for >= 7 days or >= 30 trades:
+```python
+from middleware.strategy_promotion import promotion_manager, RLShadowSoakResult
+
+summary = shadow_pnl_tracker.get_summary()
+
+soak_result = RLShadowSoakResult(
+    shadow_trades_count=summary["trades_count"],
+    shadow_duration_days=14.0,
+    shadow_max_drawdown_pct=summary["max_drawdown_pct"] / 100.0,
+    shadow_sharpe=1.45
+)
+
+# Submit soak evaluation
+ok, reason = promotion_manager.submit_rl_shadow_evaluation("rl_btc_v1", soak_result)
+
+# Approve for Paper Sleeve (Requires explicit human sign-off; auto-promotion prohibited)
+if ok:
+    promotion_manager.approve_rl_for_paper_sleeve(
+        strategy_id="rl_btc_v1",
+        approver_name="Lead Quant",
+        approver_role="Head of Risk",
+        reason="Demonstrated out-of-sample edge with positive DSR and low drawdown."
+    )
+```
+
+
+6. TRANSACTION COST MODEL SPECIFICATION
+--------------------------------------------------------------------------------
+Both training (`TradingEnv`) and live shadow tracking (`ShadowPnLTracker`) use
+the institutional cost model in `execution/cost_model.py`:
+
+Parameters:
+- Taker Fee: 4 bps (0.04% notional)
+- Half-Spread: 2 bps (0.02% notional)
+- ATR Slippage: 5% of 14-period ATR
+- Min Cost Floor: $0.05 per trade
+- Total Transaction Cost = Taker Fee + Spread + Slippage
+
+
+7. TROUBLESHOOTING & COMMON ERRORS
+--------------------------------------------------------------------------------
+Error: `CRITICAL SCHEMA MISMATCH for strategy ...`
+Cause: Feature names in `model_meta.json` do not match live `EXPECTED_FEATURE_NAMES`.
+Fix: Re-export the model using `export_onnx.py` to ensure schema hashes match.
+
+Error: `Model weights tampered or changed since registration!`
+Cause: The `.onnx` binary file was modified after registration in `promotion_manager`.
+Fix: Re-register the updated model candidate through `register_rl_candidate()`.
+
+Error: `Inference latency exceeds watchdog threshold`
+Cause: Thread contention or GPU driver initialization in the live loop.
+Fix: Ensure `CPUExecutionProvider` is used with `inter_op_num_threads=1` and `intra_op_num_threads=1` (already configured by default).
+================================================================================

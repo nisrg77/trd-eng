@@ -151,22 +151,20 @@ export const StitchHeader: React.FC = () => {
             </div>
             <div className="flex items-center gap-space-xs">
               <span className="font-label-xs text-label-xs uppercase text-on-surface-variant">DD:</span>
-              <span className="text-on-surface">{goalSummary?.monthly_drawdown_pct ? `${goalSummary.monthly_drawdown_pct}%` : '0.84%'} / 4.0%</span>
-              <div className="w-12 h-1.5 bg-surface-container-highest rounded overflow-hidden">
-                <div
-                  className="h-full bg-primary-container"
-                  style={{ width: `${Math.min(100, ((goalSummary?.monthly_drawdown_pct || 0.84) / 4.0) * 100)}%` }}
-                ></div>
-              </div>
+              <span className="text-on-surface">{((goalSummary?.current_drawdown_pct || 0.0)).toFixed(2)}%</span>
             </div>
             <div className="flex items-center gap-space-xs">
               <span className="font-label-xs text-label-xs uppercase text-on-surface-variant">MARGIN:</span>
-              <span className="text-on-surface">42.6%</span>
+              <span className="text-on-surface">
+                {equity > 0
+                  ? ((Object.values(account?.positions || {}).reduce((acc, p) => acc + Math.abs((p.qty || p.size || 0) * (p.current_price || p.entry_price || 0) / (p.leverage || 5.0)), 0) / equity) * 100).toFixed(1)
+                  : '0.0'}%
+              </span>
             </div>
             <div className="flex items-center gap-space-xs">
-              <span className="font-label-xs text-label-xs uppercase text-on-surface-variant">4% CIRCUIT:</span>
-              <span className={goalSummary?.daily_circuit_breaker_active ? 'text-error font-bold' : 'text-primary-fixed'}>
-                {goalSummary?.daily_circuit_breaker_active ? 'TRIPPED' : 'CLEAR'}
+              <span className="font-label-xs text-label-xs uppercase text-on-surface-variant">CIRCUIT:</span>
+              <span className={goalSummary?.engine_paused ? 'text-error font-bold' : 'text-primary-fixed'}>
+                {goalSummary?.engine_paused ? 'STOPPED' : 'CLEAR'}
               </span>
             </div>
           </div>

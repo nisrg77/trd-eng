@@ -30,6 +30,7 @@ import config
 
 from alpha_overlay.vap_cvd import get_predictive_signal
 from alpha_overlay.cot_bias import get_cot_zscore
+from core.patch_helpers import iff_gate, iff_params
 
 log = logging.getLogger(__name__)
 
@@ -130,24 +131,12 @@ def apply_iff_gate(
     tuple of (gated_signal: float, flow_score: float, iff_veto: bool)
     """
     flow_score = get_flow_score(symbol, obi_rho)
-    veto_threshold = getattr(config, "IFF_VETO_THRESHOLD", 0.5)
-
-    # Record flow tick timestamp for micro-buffer dwell tracking
-    _record_flow_tick(symbol, flow_score)
-
-    opposing_long  = s_composite > 0 and flow_score < -veto_threshold
-    opposing_short = s_composite < 0 and flow_score >  veto_threshold
-
-    if opposing_long or opposing_short:
-        log.info(
-            "IFF GATE VETO  %-10s  S_composite=%.3f  S_flow=%.3f  (threshold=%.2f)",
-            symbol, s_composite, flow_score, veto_threshold,
-        )
+    threshold, coeff = iff_params(config)
+    gated, veto = iff_gate(s_composite, flow_score, threshold, coeff)
+    if veto:
+        log.info("IFF GATE VETO %-10s S_composite=%.3f S_flow=%.3f (threshold=%.2f)",
+                 symbol, s_composite, flow_score, threshold)
         return 0.0, round(flow_score, 6), True
-
-    # Graduated soft scaling: S_composite * (1 + 0.5 * S_flow)
-    scale = 1.0 + 0.5 * flow_score
-    gated = float(np.clip(s_composite * scale, -1.0, 1.0))
     return round(gated, 6), round(flow_score, 6), False
 
 

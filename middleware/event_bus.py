@@ -83,7 +83,8 @@ class EventBus:
         event = {
             "type": "position_update",
             "timestamp": to_iso8601(),
-            "data": data
+            "data": data,
+            "payload": data
         }
 
         with self._lock:
@@ -94,6 +95,14 @@ class EventBus:
                     del self._active_positions[trade_id]
                 self._closed_positions.append(data)
             self._recent_events.append(event)
+
+        # Real-time WebSocket dispatch across active clients
+        try:
+            from middleware.ws_manager import ws_manager
+            from middleware.ws_schema import WSEventType
+            ws_manager.publish_from_thread(WSEventType.POSITION_UPDATE, data, channel="trading")
+        except Exception:
+            pass
 
         # Sync to MongoDB database manager if connected
         try:
@@ -133,13 +142,44 @@ class EventBus:
         event = {
             "type": "execution_log",
             "timestamp": to_iso8601(),
-            "data": data
+            "data": data,
+            "payload": data
         }
 
         with self._lock:
             self._execution_logs.append(data)
             self._recent_events.append(event)
 
+        # Real-time WebSocket dispatch across active clients
+        try:
+            from middleware.ws_manager import ws_manager
+            from middleware.ws_schema import WSEventType
+            ws_manager.publish_from_thread(WSEventType.EXECUTION_LOG, data, channel="trading")
+            # Also emit EXECUTION type for frontend listener compatibility
+            ws_manager.publish_from_thread(WSEventType.EXECUTION, data, channel="trading")
+        except Exception:
+            pass
+
+        return event
+
+    def publish_ml_signal(self, signal: dict) -> dict:
+        """
+        Dispatches standardized ML signals to event bus and WebSocket subscribers.
+        """
+        event = {
+            "type": "ML_SIGNAL",
+            "timestamp": to_iso8601(),
+            "data": signal,
+            "payload": signal
+        }
+        with self._lock:
+            self._recent_events.append(event)
+        try:
+            from middleware.ws_manager import ws_manager
+            from middleware.ws_schema import WSEventType
+            ws_manager.publish_from_thread(WSEventType.ML_SIGNAL, signal, channel="trading")
+        except Exception:
+            pass
         return event
 
     def get_engine_health(self) -> dict:
@@ -164,7 +204,8 @@ class EventBus:
         return {
             "type": "engine_health",
             "timestamp": to_iso8601(),
-            "data": data
+            "data": data,
+            "payload": data
         }
 
     def get_active_positions(self) -> List[dict]:

@@ -30,14 +30,14 @@ Raw Feed (yfinance + Alpaca REST + Binance aggTrade WS)
 | **VAP/CVD** | `alpha_overlay/vap_cvd.py` | 500-bin incremental VAP histogram (VPOC/VAH/VAL) + CVD divergence tracker. |
 | **IFF** | `alpha_overlay/iff.py` | Composite Institutional Flow Score ($S_{\text{flow}}$) and Non-blocking 5ms Micro-Buffer Hold Window. |
 | **COT** | `alpha_overlay/cot_bias.py` | CFTC Disaggregated COT macro bias tracker (CME futures proxy for crypto). |
-| **GOAL & RISK** | `goals/goal_module.py` | Monthly Ceilings (20 Crypto / 80 Stocks), Multi-Horizon Circuit Breakers (4% daily loss, 18% monthly drawdown), Dynamic Leverage ($1\times - 5\times$ Crypto / $1\times - 10\times$ Stocks). |
+| **GOAL & RISK** | `goals/goal_module.py` | Daily Trade Limits (20 Crypto / 80 Stocks per day), Multi-Horizon Circuit Breakers (4% daily loss, 18% monthly drawdown), Dynamic Leverage ($1\times - 5\times$ Crypto / $1\times - 10\times$ Stocks). |
 | **SESSION** | `execution/market_session.py` | RTH session gating (Mon–Fri 09:30–16:00 ET for US Equities / 24-7 for Crypto). |
 | **SCREENER** | `data_pipeline/stock_screener.py` | TradingView Screener v3 Batch Scanner for 55 CME SSF equities (<1s refresh). |
 | **DB** | `middleware/db_manager.py` | MongoDB Atlas persistence manager for real-time `account`, `positions`, `quota`, and `trades` synchronization. |
 | **EE** | `execution/engine.py` | 9-Layer Execution Cadence mapping signals through state, dead-day, goals, and risk modules. |
 | **OMS** | `execution/simulated_oms.py` | Risk-budget USD sizing, 6-decimal micro-crypto precision, ATR trailing stop, and VPOC/VAH/VAL take-profit snapping. |
 | **AUDIT** | `core/decision_trace.py` | `DecisionTrace` diagnostic logging to `decision_trace.jsonl` for full auditability. |
-| **WS** | `services/ws_server.py` | FastAPI WebSocket server streaming `TICK`, `GOAL_UPDATE`, `QUOTA_UPDATE`, `SCREENER_UPDATE`, `MICROSTRUCTURE`, plus REST endpoints `/api/klines`, `/api/positions`, `/api/decision-traces`. |
+| **WS** | `services/ws_server.py` | FastAPI WebSocket servers: dedicated live chart stream (`/ws/charts`) and engine telemetry gateway (`/ws/trading`) with strict schemas, dirty-check deduplication, and REST endpoints `/api/klines`, `/api/positions`, `/api/decision-traces`. |
 | **UI** | `frontend/` | Stitch MCP Next.js Trading Terminal featuring Crypto Perpetuals (`/crypto`), US Futures (`/us-futures`), and Trade Logs (`/trade-logs`). |
 
 ---
@@ -131,3 +131,19 @@ pytest tests/ -v
   }
 }
 ```
+
+---
+
+## Offline Reinforcement Learning (`research/rl/`)
+
+An offline, cost-aware Gymnasium training environment and policy suite:
+- **Cost-Aware Gymnasium Env** (`research/rl/trading_env.py`): Zero-lookahead environment deciding on bar $t$ close and filling at bar $t+1$ open.
+- **Unified Transaction Cost Model** (`execution/cost_model.py`): Deterministic accounting for taker/maker fees, spread, and ATR-proportional slippage shared between RL and live execution.
+- **Observation Normalizer**: Fit strictly on train splits and saved to disk (`norm_stats.json`) for zero data snooping.
+- **Purged Walk-Forward PPO** (`research/rl/train_rl.py`): K-fold walk-forward training with strict embargo gaps between train and validation windows.
+- **Baseline Benchmarking Suite**: Evaluates Flat, Buy & Hold, Random, and Bollinger Reversion on identical validation splits with exact cost deductions.
+- **Provenance & DSR**: Tracks seed dispersion (5 seeds per fold), Deflated Sharpe Ratio (DSR), Git commit hash, and configurable PASS/FAIL criteria.
+- **Frozen ONNX Export & Parity** (`research/rl/export_onnx.py`): Exports SB3 PPO policies to `model.onnx` alongside `model_meta.json` containing deterministic feature-schema hashes, training config hashes, Git provenance, normalization statistics, and 1,000-sample numerical parity verification.
+- **Invariants**: Guaranteed flat policy reward $\equiv 0.0$, exact cost accounting, and verified no-lookahead.
+
+

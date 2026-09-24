@@ -1,0 +1,145 @@
+# TRDENG Quantitative & Mathematical Finance Methodology
+================================================================================
+Document: info/qnt.info
+Status: ACTIVE / PRODUCTION-SPEC
+Architecture: TRDENG High-Throughput Algorithmic Engine (v4.2.8)
+================================================================================
+
+1. SYSTEM OBJECTIVE & MATHEMATICAL FOUNDATION
+--------------------------------------------------------------------------------
+TRDENG operates on a dual-sleeve portfolio architecture with strict capital
+conservation, dynamic volatility adjustment, and probabilistic regime gating:
+  - Baseline Portfolio NAV: $1,000.00 USD
+  - Sleeve 1: Crypto Perpetuals (20% allocation, $200 notional base, 20 trades/day)
+  - Sleeve 2: US Single Stock Futures / Equities (80% allocation, $800 notional base, 80 trades/day)
+  - Hard Risk Budget per Trade: Max Loss strictly capped at R <= $10.00 USD (1% NAV)
+  - Daily Loss Circuit Breaker: -4.0% NAV ($40.00 USD) hard liquidation freeze
+  - Monthly Maximum Drawdown Limit: -18.0% NAV ($180.00 USD) portfolio de-risking
+
+
+2. REGIME IDENTIFICATION: 3-STATE GAUSSIAN HIDDEN MARKOV MODEL (HMM)
+--------------------------------------------------------------------------------
+Market states exhibit non-stationary return distributions with regime persistence.
+We model the hidden state sequence S_t in {0, 1, 2} using a discrete-time
+Gaussian Hidden Markov Model:
+
+  State 0: Persistent Bull Trend (mu > 0, moderate sigma)
+  State 1: Persistent Bear Trend (mu < 0, elevated sigma)
+  State 2: High-Volatility Mean-Reverting Chop (mu ~ 0, high sigma)
+
+Mathematical Formulation:
+  - State Transition Probability Matrix:
+      A_ij = P(S_t = j | S_{t-1} = i),  sum_j(A_ij) = 1
+  - Emission Probability Distribution:
+      b_j(x_t) = N(x_t; mu_j, Sigma_j)
+      where x_t = [log_return_t, RVOL_t, normalized_CVD_t]^T
+  - Decoding:
+      Estimated state S*_t is decoded in real-time using forward-filter probabilities:
+      alpha_t(i) = P(x_1, ..., x_t, S_t = i | theta)
+      P(S_t = i | x_{1:t}) = alpha_t(i) / sum_j(alpha_t(j))
+
+Regime Gating Rules:
+  - State 0 (Bull): Only LONG momentum & breakout signals active.
+  - State 1 (Bear): Only SHORT breakout & hedge overlay active.
+  - State 2 (Chop): Directional breakout strategies FROZEN. Only mean-reversion
+    and funding arbitrage active with size multiplier = 0.50x.
+
+
+3. VOLATILITY ESTIMATION & SIZING: GARCH(1,1) DYNAMIC FORECASTING
+--------------------------------------------------------------------------------
+Volatility clustering violates homoskedastic assumptions. We employ a continuous
+GARCH(1,1) process to forecast conditional return variance sigma^2_t:
+
+  sigma_t^2 = omega + alpha * epsilon_{t-1}^2 + beta * sigma_{t-1}^2
+
+Parameter Constraints:
+  - omega > 0, alpha >= 0, beta >= 0
+  - Stationarity Condition: alpha + beta < 1
+  - Unconditional Long-Run Variance: V_L = omega / (1 - (alpha + beta))
+  - Half-Life of Volatility Shocks: tau_{1/2} = ln(0.5) / ln(alpha + beta)
+
+Dynamic Stop-Loss & Position Sizing:
+  Given forecasted volatility sigma_t and entry price P_entry:
+  1. Dynamic Stop Distance:
+       Delta_SL = max(k_atr * ATR_{14}, k_garch * P_entry * sigma_t)
+       where k_garch in [1.5, 2.5] depending on conviction.
+  2. Stop-Loss Price:
+       P_{SL} = P_entry - Delta_SL (for Long)
+       P_{SL} = P_entry + Delta_SL (for Short)
+  3. Absolute Risk Equation:
+       Risk_USD = Quantity * |P_entry - P_{SL}| <= $10.00 USD
+  4. Executable Position Sizing:
+       Quantity = floor( min( $10.00 / |P_entry - P_{SL}|, Max_Notional / P_entry ) )
+
+
+4. ORDER FLOW & MICROSTRUCTURE METRICS
+--------------------------------------------------------------------------------
+TRDENG evaluates order flow imbalances at sub-millisecond granularity via
+the lockless MicroBuffer:
+
+A. Cumulative Volume Delta (CVD):
+     CVD_t = sum_{i=1}^t (V_{i, taker_buy} - V_{i, taker_sell})
+     Z_CVD = (CVD_t - Mean_{rolling}(CVD)) / Std_{rolling}(CVD)
+     A buy breakout is only verified if Z_CVD >= +1.50 sigma.
+
+B. Order Book Imbalance (OBI):
+     OBI_t = (Q_{bid, depth} - Q_{ask, depth}) / (Q_{bid, depth} + Q_{ask, depth})
+     Depth considered: Top 5 price levels on perp orderbook.
+     Threshold: OBI > +0.25 confirms buy pressure; OBI < -0.25 confirms sell pressure.
+
+C. Micro-Price (Volume-Weighted Midpoint):
+     P_{micro} = (Q_{bid} * P_{ask} + Q_{ask} * P_{bid}) / (Q_{bid} + Q_{ask})
+     Predicts directional queue depletion before trade execution.
+
+D. Volume Point of Control (VPOC):
+     Price bin with the highest traded volume over the lookback horizon.
+     Acts as institutional gravitational mean and dynamic support/resistance anchor.
+
+
+5. P10 DEAD-DAY LIQUIDITY FILTER
+--------------------------------------------------------------------------------
+Low-liquidity sessions produce false breakouts and high-slippage whip cycles.
+We construct an empirical distribution of 20-day rolling turnover:
+
+  Turnover_t = sum_{bars} (Price * Volume)
+  P_{10} = Quantile_{0.10}(Turnover_{t-20:t})
+
+Execution Rule:
+  If Session_Turnover_t < P_{10}:
+    - Session classified as "DEAD-DAY / ILLIQUID"
+    - New breakout entries are automatically SUPPRESSED
+    - Open positions are placed in tight-trailing-stop preservation mode
+
+
+6. MACHINE LEARNING ENSEMBLE SPECIFICATION
+--------------------------------------------------------------------------------
+Model Composition:
+  - LightGBM (Gradient Boosted Decision Trees, 150 estimators, max_depth=5)
+  - XGBoost (Exact greedy tree learner, subsample=0.8, colsample_bytree=0.8)
+  - Random Forest (Bagging ensemble, 100 trees, bootstrap=True)
+
+Meta-Aggregator & Stacking:
+  P(Up | X) = w_1 * P_{LGBM} + w_2 * P_{XGB} + w_3 * P_{RF}
+  Weights calibrated via out-of-fold log-loss minimization (w_1=0.45, w_2=0.35, w_3=0.20).
+
+Calibration & Decision Gates:
+  - Probabilities are calibrated via Platt scaling (Sigmoid log-odds transform).
+  - Minimum Conviction Threshold: P(Up) >= 0.65 for Long, P(Down) >= 0.65 for Short.
+  - Signal Confidence Score is mapped to dynamic take-profit multiples:
+      TP_1 = Entry + 1.5 * Delta_SL (50% position de-risk)
+      TP_2 = Entry + 3.0 * Delta_SL (50% runner with trailing VPOC stop)
+
+
+7. GOAL & RISK GATING MODULE GOVERNANCE
+--------------------------------------------------------------------------------
+State Persistence: `quota_state.json` (Atomic JSON file-locking).
+Rules:
+  1. Active 80/20 Daily Trade Quotas (Resets Daily at 00:00 UTC):
+     - Crypto Perpetuals: Strictly capped at 20 trades / day.
+     - US Equities: Strictly capped at 80 trades / day.
+  2. Total Capital Depletion Stop ($1,000 Exhaustion):
+     - If total realized/cumulative losses reach -$1,000.00 USD (entire $1,000 capital finished),
+       the engine triggers an immediate full stop (`engine_paused = True`) and blocks all trades.
+  3. Secondary Execution Gates:
+     - Dead-day filter trade suppression and minimum conviction threshold gates in the
+       goal module are DISABLED to allow active execution flow.

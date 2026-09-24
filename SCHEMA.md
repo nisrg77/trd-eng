@@ -140,3 +140,71 @@ Returns an array of historical OHLCV candlestick bars for TradingView chart rend
 
 ### `GET /api/screener/top-stocks`
 Returns the ranked CME SSF top stock candidates sourced via the TradingView Screener batch scan.
+
+---
+
+## 3. Dedicated Live Chart WebSocket (`/ws/charts` & `/ws/chart`)
+
+High-frequency, low-latency streaming endpoint dedicated strictly to real-time charting (TradingView / Lightweight Charts). Completely decoupled from order routing, risk gating, and heavy account state.
+
+- **URL**: `ws://{host}:8000/ws/charts?symbol={symbol}&timeframe={timeframe}`
+- **Default Parameters**: `symbol=BTC-USD`, `timeframe=5s` (supports `1s`, `5s`, `15s`, `1m`)
+
+### 3.1 Initial Frame (`HISTORICAL_CANDLES`)
+Emitted immediately upon client connection:
+```json
+{
+  "type": "HISTORICAL_CANDLES",
+  "timestamp": "2026-09-24T12:00:00.000Z",
+  "channel": "chart:BTC-USD:5s",
+  "data": [
+    {"time": 1758712175, "open": 86500.0, "high": 86510.0, "low": 86495.0, "close": 86505.0, "volume": 12.5, "symbol": "BTC-USD", "timeframe": "5s", "is_bar_closed": true}
+  ],
+  "payload": [
+    {"time": 1758712175, "open": 86500.0, "high": 86510.0, "low": 86495.0, "close": 86505.0, "volume": 12.5}
+  ]
+}
+```
+
+### 3.2 Streaming Tick Frame (`TICK`)
+Emitted at ~250ms cadence:
+```json
+{
+  "type": "TICK",
+  "timestamp": "2026-09-24T12:00:05.000Z",
+  "channel": "chart:BTC-USD:5s",
+  "data": {
+    "time": 1758712200,
+    "open": 86505.0,
+    "high": 86515.0,
+    "low": 86502.0,
+    "close": 86512.0,
+    "volume": 3.4,
+    "symbol": "BTC-USD",
+    "timeframe": "5s",
+    "is_bar_closed": false
+  },
+  "payload": {
+    "time": 1758712200,
+    "open": 86505.0,
+    "high": 86515.0,
+    "low": 86502.0,
+    "close": 86512.0,
+    "volume": 3.4
+  }
+}
+```
+
+### 3.3 Inbound Client Actions
+- **Ping / Keep-alive**: `{"action": "ping"}` -> Returns `{"type": "PONG", "data": {"status": "ok"}}`
+- **Dynamic Symbol Switch**: `{"action": "subscribe", "symbol": "ETH-USD", "timeframe": "5s"}` -> Instantly switches active stream and returns new `HISTORICAL_CANDLES`.
+
+---
+
+## 4. Unified Trading & Engine Gateway (`/ws/trading`)
+
+Comprehensive telemetry and execution socket with intelligent deduplication:
+- Emits real-time ticks, order book, and engine execution events.
+- State telemetry (`ACCOUNT_UPDATE`, `GOAL_UPDATE`, `QUOTA_UPDATE`, `SCREENER_UPDATE`, `MARKET_SESSION`, `ENGINE_HEALTH`) is dirty-checked and only transmitted when mutations occur or upon a periodic 5–10s heartbeat.
+- Eliminates repeated duplicate frames and redundant disk reads.
+

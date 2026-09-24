@@ -33,8 +33,8 @@ from brain.signal_standardizer import SignalStandardizer
 from middleware.file_store import write_signal, write_execution_log
 from execution.engine import ExecutionEngine
 from execution.risk import RiskGuard
-from execution.simulated_oms import SimulatedFuturesOMS
 from data_pipeline.stock_screener import stock_screener
+from core.patch_helpers import resolve_atr, regime_thresholds, annualized_to_daily_vol
 
 logging.basicConfig(
     level=logging.INFO,
@@ -81,9 +81,15 @@ class CoreBrain:
         xgb_sig   = xgb.predict(x_latest)
         lstm_sig  = lstm.predict(X)
 
-        garch_vol   = payload["features"].get("garch_vol", 0.01)
-        obi_rho     = payload["features"].get("order_book_imbalance", 0.0)
-        aggregation = self.ma.aggregate(ridge_sig, xgb_sig, lstm_sig, garch_vol)
+        features  = payload["features"]
+        daily_vol = features.get("garch_vol_daily")
+        if daily_vol is None:
+            daily_vol = annualized_to_daily_vol(features.get("garch_vol", 0.16))
+        hist = [v / 252 ** 0.5 for v in payload.get("_feature_history", {}).get("garch_vol", []) if v == v]
+        thresholds = regime_thresholds(
+            hist, fallback=(config.REGIME_VOL_THRESHOLD_LOW, config.REGIME_VOL_THRESHOLD_HIGH))
+        aggregation = self.ma.aggregate(ridge_sig, xgb_sig, lstm_sig, daily_vol, vol_thresholds=thresholds)
+        obi_rho     = features.get("order_book_imbalance", 0.0)
 
         # ── IFF Gate: institutional flow veto & scale applied right after MA ──
         try:
@@ -153,12 +159,9 @@ def main() -> None:
     brain = CoreBrain()
     ee    = ExecutionEngine()
     rg    = RiskGuard()
-    if config.USE_SIMULATED_FUTURES:
-        oms = SimulatedFuturesOMS()
-        log.info("Using SimulatedFuturesOMS (10x Leverage) for Execution.")
-    else:
-        oms = AlpacaOMS()
-        log.info("Using AlpacaOMS for Execution.")
+    from execution.oms_router import UnifiedOMS
+    oms = UnifiedOMS()
+    log.info("Using UnifiedOMS (Binance + Alpaca) for Execution.")
 
     cycle = 0
     for batch in dp.stream():
@@ -167,7 +170,8 @@ def main() -> None:
         
         # Update Risk Guard with latest portfolio exposures from OMS
         current_exp, instr_exp = oms.get_portfolio_exposures()
-        rg.update_state(current_exp, instr_exp)
+        acct = oms.get_account_state() if hasattr(oms, "get_account_state") else {}
+        rg.update_state(current_exp, instr_exp, current_equity=acct.get("equity"))
         
         current_prices = {}
         atr_values = {}
@@ -178,8 +182,7 @@ def main() -> None:
             current_prices[instr] = close_price
             
             features = payload.get("features", {})
-            garch_vol = features.get("garch_vol", 0.015)
-            atr_proxy = close_price * garch_vol if garch_vol > 0 else close_price * 0.015
+            atr_proxy = resolve_atr(features, close_price)
             atr_values[instr] = atr_proxy
             obi_rho = features.get("order_book_imbalance", 0.0)
 
@@ -216,6 +219,11 @@ def main() -> None:
                 signal["conviction_score"] = dead_day_res["effective_conviction"]
                 
                 write_signal(signal)
+                try:
+                    from middleware.event_bus import event_bus
+                    event_bus.publish_ml_signal(signal)
+                except Exception:
+                    pass
                 log.info(
                     "  ✓ %-10s  dir=%+.4f  conf=%.3f  conv=%.3f  regime=%-18s  latency=%.1fms",
                     instr,
@@ -271,12 +279,6 @@ def main() -> None:
                 
         if hasattr(oms, "update_prices"):
             exits = oms.update_prices(current_prices, atr_values)
-            if exits:
-                from goals.goal_module import record_trade_result
-                for ex in exits:
-                    ex_instr = ex.get("instrument", "")
-                    ac = "crypto" if ex_instr in config.CRYPTO_INSTRUMENTS else "stock"
-                    record_trade_result(ac, ex.get("realized_pnl", 0.0))
 
 
 if __name__ == "__main__":

@@ -1,10 +1,10 @@
 """
 goals/goal_module.py — Simplified Goal & Risk Gating Module
 
-Evaluates:
-  1. Has the $1000 monthly loss limit been breached?
-  2. Is this asset class's daily trade ceiling (20/80) already hit?
-  3. Is today a dead day?
+Active Rules:
+  1. 80/20 Daily Trade Rule: Crypto strictly capped at 20 trades/day, Stocks at 80 trades/day.
+  2. Total Capital Depletion Stop: If the $1000 capital is completely finished (total PnL <= -$1000.0), system stops.
+  (All other execution gates are disabled).
 """
 
 from __future__ import annotations
@@ -156,32 +156,43 @@ def evaluate_trade(
     _roll_periods(state)
     bucket = state.bucket(ac)
 
-    # 1. Engine-wide pause (monthly loss breach)
-    if state.engine_paused:
-        return TradeDecision(False, "Engine paused: Max monthly loss reached.")
-
-    total_monthly_pnl = state.crypto.realized_pnl_this_month_usd + state.stock.realized_pnl_this_month_usd
-    if total_monthly_pnl <= MAX_MONTHLY_LOSS_USD:
+    # 1. Total $1000 capital finished check — system stops completely when capital is exhausted
+    total_realized_pnl = state.crypto.realized_pnl_this_month_usd + state.stock.realized_pnl_this_month_usd
+    if total_realized_pnl <= -TOTAL_CAPITAL_USD:
         state.engine_paused = True
         if persist:
             save_state(state)
-        return TradeDecision(False, f"Monthly loss limit hit ({total_monthly_pnl} <= {MAX_MONTHLY_LOSS_USD})")
+        return TradeDecision(False, f"Engine stopped: $1000 total capital finished (PnL: ${total_realized_pnl:.2f})")
 
-    # 2. Daily trade ceiling
+    # If capital has not been finished (PnL > -1000), unpause engine if it was paused
+    if state.engine_paused:
+        if total_realized_pnl > -TOTAL_CAPITAL_USD:
+            state.engine_paused = False
+            if persist:
+                save_state(state)
+        else:
+            return TradeDecision(False, "Engine stopped: $1000 total capital finished.")
+
+    # 2. Daily 80/20 trade limit rule (20 crypto / 80 stock per day)
     limit = DAILY_TRADE_LIMITS[ac]
     if bucket.trades_today >= limit:
         return TradeDecision(False, f"{ac} daily trade limit reached ({bucket.trades_today}/{limit})")
 
-    # 3. Dead-day gate
-    if dead_day_result.get("is_dead_day"):
-        return TradeDecision(False, f"Dead day: {dead_day_result.get('dead_day_reason', 'flagged')}")
+    # NOTE: All other execution gates (dead-day filter, zero conviction gate, etc.)
+    # are DISABLED per user specification. Only the 80/20 daily trade rule and $1000
+    # capital depletion stop remain active.
 
-    if dead_day_result.get("effective_conviction", 0.0) <= 0.0:
-        return TradeDecision(False, "Zero effective conviction — no qualifying signal")
-
-    # 4. Approved — compute dynamic leverage from conviction
-    effective_conviction = float(dead_day_result.get("effective_conviction", 0.5))
-    range_atr_ratio = float(dead_day_result.get("range_atr_ratio", 1.0))
+    # 3. Approved — calculate dynamic leverage
+    effective_conviction = (
+        float(dead_day_result.get("effective_conviction", 1.0))
+        if isinstance(dead_day_result, dict)
+        else 1.0
+    )
+    range_atr_ratio = (
+        float(dead_day_result.get("range_atr_ratio", 1.0))
+        if isinstance(dead_day_result, dict)
+        else 1.0
+    )
     dyn_leverage = select_leverage(ac, effective_conviction, range_atr_ratio)
     return TradeDecision(True, "OK", leverage=dyn_leverage)
 
@@ -201,10 +212,17 @@ def record_trade_result(
     bucket.trades_today += 1
     bucket.realized_pnl_this_month_usd += pnl_usd
 
+    total_pnl = state.crypto.realized_pnl_this_month_usd + state.stock.realized_pnl_this_month_usd
+    if total_pnl <= -TOTAL_CAPITAL_USD:
+        state.engine_paused = True
+        log.critical(
+            f"[GoalModule] TOTAL $1000 CAPITAL FINISHED (Total PnL: ${total_pnl:+.2f}). SYSTEM STOPPED."
+        )
+
     log.info(
         f"[GoalModule] {ac.upper()} Trade Closed (P/L: ${pnl_usd:+.2f}). "
         f"Daily Trades: {bucket.trades_today}/{DAILY_TRADE_LIMITS[ac]}, "
-        f"Month P/L: ${bucket.realized_pnl_this_month_usd:+.2f}"
+        f"Month P/L: ${bucket.realized_pnl_this_month_usd:+.2f}, Total P/L: ${total_pnl:+.2f}"
     )
 
     if persist:

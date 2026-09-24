@@ -160,10 +160,20 @@ export const useTradingWebSocket = () => {
         const ws = new WebSocket(`${url}?symbol=${selectedSymbol}`);
         wsRef.current = ws;
 
+        let pingTimer: NodeJS.Timeout;
+
         ws.onopen = () => {
           if (!isMounted) return;
           setConnectionStatus('CONNECTED');
           if (pollInterval) clearInterval(pollInterval);
+
+          // Periodic keep-alive ping
+          pingTimer = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ action: 'ping' }));
+            }
+          }, 15000);
+
           addLog({
             id: `ws_open_${Date.now()}`,
             timestamp: Date.now() / 1000,
@@ -177,46 +187,76 @@ export const useTradingWebSocket = () => {
           if (!isMounted) return;
           try {
             const data = JSON.parse(event.data);
+            const payload = data.payload ?? data.data;
+            if (!payload && data.type !== 'PONG') return;
+
             switch (data.type) {
-              case 'HISTORICAL_CANDLES':
-                useTradingStore.getState().setHistoricalCandles(data.payload);
+              case 'HISTORICAL_CANDLES': {
+                const candles = Array.isArray(payload) ? payload : (payload.candles ?? []);
+                if (candles && candles.length > 0) {
+                  useTradingStore.getState().setHistoricalCandles(candles);
+                }
                 break;
+              }
               case 'TICK':
-                updateTick(data.payload);
+              case 'CHART_TICK':
+                updateTick(payload);
                 break;
 
               case 'ORDER_BOOK':
-                updateOrderBook(data.payload);
+                updateOrderBook(payload);
                 break;
               case 'ACCOUNT_UPDATE':
-                if (data.payload && data.payload.positions) {
-                  data.payload.positions = normalizePositions(data.payload.positions);
+                if (payload && payload.positions) {
+                  payload.positions = normalizePositions(payload.positions);
                 }
-                updateAccount(data.payload);
+                updateAccount(payload);
                 break;
+              case 'POSITION_UPDATE': {
+                const pos = payload;
+                if (pos && (pos.symbol || pos.instrument)) {
+                  const sym = pos.symbol ?? pos.instrument;
+                  const curPositions = { ...useTradingStore.getState().account.positions };
+                  if (String(pos.status).toLowerCase() === 'closed') {
+                    delete curPositions[sym];
+                  } else {
+                    curPositions[sym] = pos;
+                  }
+                  updateAccount({ positions: normalizePositions(curPositions) });
+                }
+                break;
+              }
               case 'ML_SIGNAL':
-                addSignal(data.payload);
+                addSignal(payload);
                 break;
               case 'EXECUTION':
-                addExecution(normalizeExecution(data.payload));
+              case 'EXECUTION_LOG':
+                addExecution(normalizeExecution(payload));
                 break;
               case 'LOG':
-                addLog(data.payload);
+                addLog(payload);
                 break;
               case 'QUOTA_UPDATE':
-                useTradingStore.getState().updateQuotaState(data.payload);
+                useTradingStore.getState().updateQuotaState(payload);
                 break;
               case 'SCREENER_UPDATE':
-                useTradingStore.getState().updateScreenerTargets(data.payload);
+                useTradingStore.getState().updateScreenerTargets(payload);
                 break;
               case 'MICROSTRUCTURE':
-                useTradingStore.getState().updateMicrostructure(data.payload);
+                useTradingStore.getState().updateMicrostructure(payload);
                 break;
               case 'MARKET_SESSION':
-                useTradingStore.getState().updateMarketSession(data.payload);
+                useTradingStore.getState().updateMarketSession(payload);
                 break;
               case 'GOAL_UPDATE':
-                useTradingStore.getState().updateGoalSummary(data.payload);
+                useTradingStore.getState().updateGoalSummary(payload);
+                break;
+              case 'ENGINE_HEALTH':
+                if (payload && payload.status === 'healthy') {
+                  setConnectionStatus('CONNECTED');
+                }
+                break;
+              case 'PONG':
                 break;
             }
           } catch (err) {
@@ -225,6 +265,7 @@ export const useTradingWebSocket = () => {
         };
 
         ws.onerror = () => {
+          if (pingTimer) clearInterval(pingTimer);
           if (isMounted) {
             setConnectionStatus('DISCONNECTED');
             pollFallbackData();
@@ -232,6 +273,7 @@ export const useTradingWebSocket = () => {
         };
 
         ws.onclose = () => {
+          if (pingTimer) clearInterval(pingTimer);
           if (!isMounted) return;
           setConnectionStatus('DISCONNECTED');
           pollFallbackData();

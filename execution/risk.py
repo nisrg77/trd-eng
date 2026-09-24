@@ -2,36 +2,78 @@
 execution/risk.py — Asset-Class Separated Risk & Compliance Guard (RG)
 
 Evaluates proposed orders against separated limits:
-  1. Kelly Criterion dynamic position sizing
+  1. Kelly Criterion dynamic position sizing (informational — see note in check_order)
   2. Asset-Class Drawdown Circuit Breakers:
-     - US Stock Futures: Strict 3% daily drawdown ($300 loss limit on $10,000 equity)
-     - Crypto Futures: 6% daily drawdown (accommodating 24/7 intraday crypto swings)
+       - US Stock Futures: 3% daily drawdown
+       - Crypto Futures:   6% daily drawdown
+       - All:              10% monthly drawdown
   3. Exposure and concentration risk checks with dynamic sizing auto-trim
+
+PATCH NOTES
+  * `import json` added — recalibrate_kelly_parameters() previously hit a NameError that
+    the surrounding `except Exception` silently swallowed (it always fell back to defaults).
+  * The circuit breaker was inert: check_order() defaulted current_equity to 1000.0 and the
+    day/month baselines never moved, so drawdown was always 0. RiskGuard now tracks live
+    equity (pass it to update_state) and rolls the baselines at UTC day / month boundaries.
+  * Take-profit and exposure-reducing orders are exempt from the breaker so a tripped
+    breaker can never block a position from being closed.
 """
 
 from __future__ import annotations
-import time
-import sys
+
+import json
 import os
+import sys
+import time
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
+
 class RiskGuard:
     def __init__(self):
+        # Start at 0, will be overwritten by first update_state with actual broker equity
+        self.daily_start_equity = 0.0
+        self.monthly_start_equity = 0.0
         self.current_exposure_pct = 0.0
         self.exposure_by_instrument = {}
-        self.daily_start_equity = 1000.0
-        self.monthly_start_equity = 1000.0
+        self.current_equity = None          # set by update_state()
+        self._day_key = None
+        self._month_key = None
         self.circuit_breaker_active = False
         self.trailing_win_rate = 0.55
         self.trailing_payoff_ratio = 1.50
         self.recalibration_window = 50
 
-    def update_state(self, current_exposure: float, instrument_exposures: dict[str, dict | float], current_equity: float = 1000.0):
-        """Syncs internal state with live portfolio state."""
+    def update_state(
+        self,
+        current_exposure: float,
+        instrument_exposures: dict[str, dict | float],
+        current_equity: float | None = None,
+    ):
+        """Syncs internal state with live portfolio state (and rolls drawdown baselines)."""
         self.current_exposure_pct = current_exposure
         self.exposure_by_instrument = instrument_exposures
+        if current_equity is None:
+            return
+            
+        current_equity = float(current_equity)
+        
+        # Lock in actual API equity on first run instead of using hardcoded config balance
+        if self.daily_start_equity == 0.0:
+            self.daily_start_equity = current_equity
+            self.monthly_start_equity = current_equity
+
+        self.current_equity = current_equity
+        now = datetime.now(timezone.utc)
+        day_key, month_key = now.strftime("%Y-%m-%d"), now.strftime("%Y-%m")
+        # First observation keeps the constructor baseline; later boundaries re-base to live equity.
+        if self._day_key is not None and day_key != self._day_key:
+            self.daily_start_equity = self.current_equity
+        if self._month_key is not None and month_key != self._month_key:
+            self.monthly_start_equity = self.current_equity
+        self._day_key, self._month_key = day_key, month_key
 
     def recalibrate_kelly_parameters(self, trades_history: list = None) -> tuple[float, float]:
         """
@@ -82,43 +124,56 @@ class RiskGuard:
         b = max(win_loss_ratio, 0.1)
         f_star = (p * (b + 1.0) - 1.0) / b
         half_kelly = max(0.0, f_star * 0.5)
-        return min(round(half_kelly, 4), 0.20) # Cap max single allocation at 20%
+        return min(round(half_kelly, 4), 0.20)  # Cap max single allocation at 20%
 
-    def check_order(self, proposed_order: dict, current_equity: float = 1000.0) -> dict:
-        """
-        Validates proposed order with asset-class specific circuit breakers.
-        """
+    def check_order(self, proposed_order: dict, current_equity: float | None = None) -> dict:
+        """Validates a proposed order with asset-class specific circuit breakers."""
         evaluated_order = dict(proposed_order)
         evaluated_order["risk_check_timestamp"] = time.time()
-        
-        instrument = proposed_order.get("instrument", "BTC-USD")
-        is_crypto = instrument in ["BTC-USD", "ETH-USD"]
 
-        # Asset-Class Specific Circuit Breakers
-        # US Stock Futures: Strict 3% Daily Drawdown
-        # Crypto Futures: 6% Daily Drawdown
+        instrument = proposed_order.get("instrument", "BTC-USD")
+        is_crypto = instrument in getattr(config, "CRYPTO_INSTRUMENTS", ["BTC-USD", "ETH-USD"])
+        action = proposed_order.get("action")
+
+        instr_data = self.exposure_by_instrument.get(instrument, {})
+        current_instr_exposure = instr_data.get("exposure_pct", 0.0) if isinstance(instr_data, dict) else (instr_data or 0.0)
+        existing_side = instr_data.get("side") if isinstance(instr_data, dict) else ("LONG" if current_instr_exposure > 0 else None)
+
+        # A SELL reduces exposure if the existing position is LONG; a BUY if it is SHORT.
+        is_reducing = (
+            (existing_side == "LONG" and action == "SELL") or
+            (existing_side == "SHORT" and action == "BUY")
+        )
+        is_take_profit = bool(proposed_order.get("is_take_profit"))
+
+        # ── 1. Circuit breaker (entries only — exits must always be possible) ──
+        if current_equity is None:
+            current_equity = self.current_equity if self.current_equity is not None else self.daily_start_equity
         daily_dd_limit = 0.06 if is_crypto else 0.03
         daily_dd = (self.daily_start_equity - current_equity) / max(1.0, self.daily_start_equity)
         monthly_dd = (self.monthly_start_equity - current_equity) / max(1.0, self.monthly_start_equity)
 
-        # 1. Circuit Breaker Check
-        if daily_dd >= daily_dd_limit or monthly_dd >= 0.10:
+        if not (is_take_profit or is_reducing) and (daily_dd >= daily_dd_limit or monthly_dd >= 0.10):
+            self.circuit_breaker_active = True
             evaluated_order["risk_state"] = "REJECTED"
             evaluated_order["failed_check"] = "circuit_breaker_active"
-            asset_label = "Crypto Futures (6%)" if is_crypto else "US Stock Futures (3% / $300)"
-            evaluated_order["detail"] = f"EMERGENCY: Hard circuit breaker triggered for {asset_label}."
+            asset_label = "Crypto Futures (6%)" if is_crypto else "US Stock Futures (3%)"
+            evaluated_order["detail"] = (
+                f"EMERGENCY: Hard circuit breaker triggered for {asset_label} "
+                f"(daily dd {daily_dd:.2%}, monthly dd {monthly_dd:.2%})."
+            )
             return evaluated_order
+        self.circuit_breaker_active = False
 
-        # 2. Take Profit bypasses risk checks
-        if proposed_order.get("is_take_profit"):
+        # ── 2. Take Profit bypasses the remaining checks ──
+        if is_take_profit:
             evaluated_order["risk_state"] = "APPROVED"
             evaluated_order["checks_passed"] = ["take_profit_auto_approve"]
             return evaluated_order
 
         confidence = proposed_order.get("confidence", 0.5)
-        action = proposed_order.get("action")
-        
-        # Dynamic Kelly Allocation
+
+        # Dynamic Kelly Allocation (informational: the engine's allocation is what gets sized)
         kelly_alloc = self.calculate_kelly_size(confidence)
         alloc_pct = proposed_order.get("portfolio_allocation_pct", kelly_alloc)
         evaluated_order["kelly_allocation_pct"] = kelly_alloc
@@ -126,17 +181,7 @@ class RiskGuard:
         prof_name = config.ACTIVE_RISK_PROFILE
         profile = config.RISK_PROFILES.get(prof_name, config.RISK_PROFILES["Balanced"])
 
-        instr_data = self.exposure_by_instrument.get(instrument, {})
-        current_instr_exposure = instr_data.get("exposure_pct", 0.0) if isinstance(instr_data, dict) else (instr_data or 0.0)
-        existing_side = instr_data.get("side") if isinstance(instr_data, dict) else ("LONG" if current_instr_exposure > 0 else None)
-        
-        # Exposure reduction always APPROVED:
-        # A SELL reduces exposure if the existing position is LONG.
-        # A BUY reduces exposure if the existing position is SHORT.
-        is_reducing = (
-            (existing_side == "LONG" and action == "SELL") or
-            (existing_side == "SHORT" and action == "BUY")
-        )
+        # Exposure reduction always APPROVED
         if is_reducing:
             evaluated_order["risk_state"] = "APPROVED"
             evaluated_order["checks_passed"] = ["reducing_exposure_auto_approve"]
@@ -183,5 +228,4 @@ class RiskGuard:
         evaluated_order["risk_state"] = "APPROVED"
         evaluated_order["checks_passed"] = ["exposure_ok", "concentration_ok"]
         evaluated_order["portfolio_allocation_pct"] = round(alloc_pct, 4)
-
         return evaluated_order

@@ -15,6 +15,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
+_SIDE_TO_ACTION = {"LONG": "BUY", "SHORT": "SELL"}
+
+
 # TRDENG Pipeline Cadence Contract
 # Layer                          | Runs on           | Source file
 # ------------------------------ | ------------------ | -------------------------
@@ -84,8 +87,10 @@ class ExecutionEngine:
         # 1. Check for Partial Take-Profit opportunities
         if instr in instrument_data:
             pos = instrument_data[instr]
-            if pos.get("unrealized_plpc", 0.0) >= profile["PARTIAL_TP_THRESHOLD_PCT"]:
-                action = "SELL" if pos.get("exposure_pct", 0) > 0 else "BUY"
+            side = pos.get("side") or ("LONG" if pos.get("exposure_pct", 0) > 0 else "SHORT")
+            if (pos.get("unrealized_plpc", 0.0) >= profile["PARTIAL_TP_THRESHOLD_PCT"]
+                    and not pos.get("partial_tp_done", False)):
+                action = "SELL" if side == "LONG" else "BUY"
                 alloc_pct = pos.get("exposure_pct", 0) * profile["PARTIAL_TP_SELL_PCT"]
                 order_id = "ord_tp_" + uuid.uuid4().hex[:8]
                 
@@ -121,6 +126,7 @@ class ExecutionEngine:
                     "confidence": 1.0,
                     "timestamp_proposed": now,
                     "is_take_profit": True,
+                    "close_fraction": profile["PARTIAL_TP_SELL_PCT"],
                     "decision_trace": trace.to_dict()
                 }
 
@@ -155,25 +161,20 @@ class ExecutionEngine:
         filter_mode = dead_day_result.get("filter_mode", "Static Fallback")
         effective_conviction = float(dead_day_result.get("effective_conviction", confidence))
         
-        flow_score = 0.0
-        iff_veto = False
-        scaled_signal = direction
-
-        try:
-            from alpha_overlay.iff import get_flow_score
-            import config as _cfg
-            obi_rho = float(signal.get("obi_rho", signal.get("features", {}).get("order_book_imbalance", 0.0)))
-            flow_score = float(get_flow_score(instr, obi_rho))
-            # Must match iff.py: threshold 0.65, crypto exempt from hard veto
-            veto_thresh = getattr(_cfg, "IFF_VETO_THRESHOLD", 0.65)
-            is_crypto = instr in getattr(_cfg, "CRYPTO_INSTRUMENTS", [])
-            if not is_crypto:
-                if (direction > 0 and flow_score < -veto_thresh) or (direction < 0 and flow_score > veto_thresh):
-                    iff_veto = True
-            # Soft scale capped at ±30% (matches iff.py)
-            scaled_signal = direction * (1.0 + 0.3 * flow_score)
-        except Exception:
-            pass
+        flow_score    = float(signal.get("flow_score", 0.0))
+        iff_veto      = bool(signal.get("iff_veto", False))
+        scaled_signal = direction                      # already gated in CoreBrain
+        if "flow_score" not in signal:                 # legacy packets only
+            try:
+                from alpha_overlay.iff import get_flow_score
+                from core.patch_helpers import iff_gate, iff_params
+                flow_score = float(get_flow_score(instr, float(signal.get("obi_rho", 0.0))))
+                thr, coeff = iff_params(config)
+                scaled_signal, iff_veto = iff_gate(direction, flow_score, thr, coeff)
+                if iff_veto:
+                    direction = 0.0
+            except Exception:
+                pass
 
         if not decision.allowed:
             block_reason = "BLOCKED_DEAD_DAY" if is_dead_day else "BLOCKED_GOAL_GATE"
@@ -209,7 +210,7 @@ class ExecutionEngine:
             )
             return None
 
-        if effective_conviction < getattr(config, "MIN_CONFIDENCE_THRESHOLD", 0.35):
+        if effective_conviction < getattr(config, "MIN_CONFIDENCE_THRESHOLD", 0.20):
             trace = DecisionTrace(
                 symbol=instr,
                 timestamp=now,
@@ -235,7 +236,7 @@ class ExecutionEngine:
                 instrument=instr,
                 asset_class=asset_class,
                 gate="LOW_CONVICTION",
-                reason=f"effective_conviction {effective_conviction:.4f} < threshold {getattr(config, 'MIN_CONFIDENCE_THRESHOLD', 0.35)}",
+                reason=f"effective_conviction {effective_conviction:.4f} < threshold {getattr(config, 'MIN_CONFIDENCE_THRESHOLD', 0.20)}",
                 final_action="BLOCKED_LOW_CONVICTION",
                 direction=direction,
                 effective_conviction=effective_conviction,
@@ -244,8 +245,9 @@ class ExecutionEngine:
 
         allocation_pct = effective_conviction * profile["KELLY_FRACTION"]
         allocation_pct = min(allocation_pct, profile["MAX_POSITION_SIZE_PCT"])
-        flow_mult = 1.0 + flow_score
-        allocation_pct = min(allocation_pct * flow_mult, profile["MAX_POSITION_SIZE_PCT"])
+        from core.patch_helpers import flow_alignment_mult
+        allocation_pct = min(allocation_pct * flow_alignment_mult(direction, flow_score),
+                             profile["MAX_POSITION_SIZE_PCT"])
 
         action = "BUY" if direction > 0 else "SELL" if direction < 0 else "HOLD"
         if action == "HOLD" or allocation_pct < 0.01:
@@ -253,8 +255,8 @@ class ExecutionEngine:
 
         if instr in instrument_data:
             existing_pos = instrument_data[instr]
-            existing_side = existing_pos.get("side", "LONG" if existing_pos.get("exposure_pct", 0) > 0 else None)
-            if existing_side == action:
+            existing_side = existing_pos.get("side") or ("LONG" if existing_pos.get("exposure_pct", 0) > 0 else "SHORT" if existing_pos.get("exposure_pct", 0) < 0 else None)
+            if _SIDE_TO_ACTION.get(existing_side) == action:
                 return None
 
         # ── Micro-Buffer Hold Queue & Dwell-Time Veto Check ──────────────────

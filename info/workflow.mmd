@@ -1,0 +1,69 @@
+sequenceDiagram
+    autonumber
+    participant Feed as Market Feed (Binance / CME)
+    participant MB as MicroBuffer & ChartFeed
+    participant QNT as Quant Pipeline (HMM / GARCH / Ensemble)
+    participant Strat as Strategy Sleeves (Crypto / US Equities)
+    participant Gate as Hardened Risk Guard & Quota Manager
+    participant OMS as Execution Engine / OMS
+    participant Bus as EventBus & WS Manager
+    participant UI as Frontend Terminal (Localhost:3000)
+
+    %% Step 1: Market Data Ingestion & Tick Buffering
+    Feed->>MB: Ingest Raw Tick / L2 Snapshot (aggTrade / quote)
+    par High-Frequency Candle Processing
+        MB->>MB: Aggregate into in-memory rolling OHLCV (1s/5s/1m)
+        MB-->>Bus: Publish Candle Update (Dedicated Chart Channel)
+        Bus-->>UI: WebSocket Frame /ws/charts (Live Candlestick Stream)
+    and Feature Extraction
+        MB->>QNT: Stream Tick to Microstructure (CVD, OBI, VPOC)
+    end
+
+    %% Step 2: Quantitative Regime Detection & Gating
+    QNT->>QNT: Evaluate 3-State Gaussian HMM (Bull / Bear / Chop)
+    QNT->>QNT: Compute GARCH(1,1) Dynamic Volatility & ATR Band
+    QNT->>QNT: Run P10 Dead-Day Volume Filter
+    alt Market Volume < P10 Baseline OR Chop Regime Active
+        QNT-->>Strat: SUPPRESS Signals (Dead-Day / Low Liquidity Lock)
+    else Regime Validated
+        QNT->>Strat: Forward Regime + Volatility + Features
+    end
+
+    %% Step 3: Strategy Signal Generation
+    par Crypto Sleeve (20% Allocation)
+        Strat->>Strat: NFI Breakout / Funding Arbitrage / Trend Evaluation
+    and US Equities Sleeve (80% Allocation)
+        Strat->>Strat: 15-Min ORB / RVOL Momentum / Mean Reversion
+    end
+    Strat->>Gate: Emit Intent (Signal, Direction, Conviction, Target Notional)
+
+    %% Step 4: Multi-Layer Risk & Quota Gating
+    critical Pre-Trade Risk Verification
+        Gate->>Gate: Check Daily Quota State (Crypto <= 20/day, Equities <= 80/day)
+        Gate->>Gate: Check 4% Daily Drawdown Circuit Breaker
+        Gate->>Gate: Check 18% Portfolio Max Drawdown Limit
+        Gate->>Gate: Compute Dynamic Risk Budget (Strictly <= $10 USD Max Loss)
+        Gate->>Gate: Calculate Dynamic Stop-Loss & Take-Profit Levels
+    end
+
+    alt Any Risk Gate Fails
+        Gate-->>Bus: Publish REJECTION Audit Event (Reason, Rule ID)
+        Bus-->>UI: Live Rejection Toast & Telemetry Flag
+    else Risk Cleared & Quota Reserved
+        Gate->>Gate: Atomically Increment Daily Quota (quota_state.json)
+        Gate->>OMS: Dispatch Approved Order (Type, Symbol, Size, SL/TP)
+    end
+
+    %% Step 5: Execution & Smart Routing
+    alt Simulation Mode (Paper Soak)
+        OMS->>OMS: Simulated 10x Margin Engine Fill (Slippage + Latency Model)
+    else Live Production Mode
+        OMS->>Feed: Route to Exchange Gateway via CCXT / Alpaca
+    end
+
+    %% Step 6: Post-Trade Accounting & State Broadcast
+    OMS->>OMS: Update Account Equity, Free Margin, Unrealized PnL
+    OMS->>Bus: Emit ORDER_EXECUTED / POSITION_UPDATE / RISK_ALERT
+    Bus->>Bus: Deduplicate State & Broadcast to /ws/trading
+    Bus-->>UI: WebSocket Frame: Positions, Equity, Executed Logs, Health
+    UI->>UI: React Store Update (Rerender Terminals & Risk Gauges)

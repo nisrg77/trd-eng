@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, IChartApi, ISeriesApi, CandlestickData, ColorType } from 'lightweight-charts';
 import { useTradingStore } from '@/store/useTradingStore';
+import { useLiveChartWebSocket } from '@/hooks/useLiveChartWebSocket';
 
 export const TradingViewChart: React.FC = () => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -15,6 +16,9 @@ export const TradingViewChart: React.FC = () => {
   const selectedSymbol = useTradingStore((state) => state.selectedSymbol);
 
   const [activeTimeframe, setActiveTimeframe] = useState<string>('5s');
+
+  // Dedicated low-latency WebSocket connection for live chart ticks & candles
+  useLiveChartWebSocket(selectedSymbol, activeTimeframe);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;

@@ -1,0 +1,200 @@
+================================================================================
+TRDENG — DATA & EXECUTION PIPELINING SPECIFICATION
+File: info/pipelining.txt
+Version: 5.0 (Multi-Cadence High-Throughput Pipeline)
+================================================================================
+
+1. PIPELINE CADENCE CONTRACT
+--------------------------------------------------------------------------------
+TRDENG enforces a strict multi-cadence pipeline architecture. Different operations
+run at different execution cadences to balance microsecond latency with computational
+efficiency:
+
+Cadence Level       | Trigger Frequency     | Operations Executed
+--------------------|-----------------------|-------------------------------------------
+1. Micro-Tick       | Continuous (Per Tick) | • WebSocket aggTrade ingestion
+                    | (~5-20ms)             | • Incremental 500-bin VAP updates (VPOC/VAH/VAL)
+                    |                       | • CVD cumulative volume delta divergence
+                    |                       | • Order Book Imbalance (OBI) proxy calculation
+                    |                       | • Micro-buffer 5ms hold-dwell tracking
+--------------------|-----------------------|-------------------------------------------
+2. Bar Close        | Per Bar Close         | • OHLCV bar finalization
+                    | (1m, 5m, 15m)         | • Fractional Differentiation (FracDiff)
+                    |                       | • Technical indicators (pandas-ta / TA-Lib)
+                    |                       | • Gaussian HMM Regime Detection
+                    |                       | • Strategy Signal Generation (Pure plugins)
+                    |                       | • Meta-Aggregator Blending
+                    |                       | • Dead-Day Filter (Chop session detector)
+--------------------|-----------------------|-------------------------------------------
+3. Order Proposal   | Per Signal Trigger    | • Dynamic Leverage Curve (ATR stretch penalty)
+                    | (On Demand)           | • Kelly Criterion Risk-Budget USD sizing
+                    |                       | • Monthly Loss Ceiling Check (-$1000 limit)
+                    |                       | • Daily Trade Counter Check (20 Crypto / 80 Stock)
+                    |                       | • Micro-buffer dwell veto
+                    |                       | • LOB Imbalance veto (rho > 0.2)
+--------------------|-----------------------|-------------------------------------------
+4. Execution Fill   | Per Trade Event       | • Realistic Slippage & Fee deduction
+                    | (<1ms post-gate)      | • Structural VPOC TP Snapping (TP1/TP2)
+                    |                       | • Dynamic ATR Trailing Stop Initialization
+                    |                       | • MongoDB Account & Position state sync
+                    |                       | • WebSocket Client Broadcast (SCHEMA.md)
+--------------------|-----------------------|-------------------------------------------
+5. Calendar Session | Periodic (Hourly/Day) | • US Equities RTH Session Gating (09:30-16:00 ET)
+                    |                       | • Daily Trade Counter Reset (00:00 UTC)
+                    |                       | • Monthly Drawdown Calendar Rollover
+                    |                       | • 55 CME SSF Screener Top-Quintile Rescan
+
+
+2. SEPARATED ASSET PIPELINES
+--------------------------------------------------------------------------------
+
+2.1 CRYPTO PERPETUALS PIPELINE (24/7/365 Continuous Flow)
+```
+[Binance aggTrade WebSocket] 
+         │ (Continuous Raw Ticks)
+         ▼
+[Microstructure Engine (vap_cvd.py)]
+ ├── Incremental 500-Bin VAP Histogram (Bin width: 0.1% price)
+ ├── CVD Tracking & Divergence Score
+ └── Multi-Venue Aggregated Order Book Imbalance
+         │
+         ▼ (Every 15m Bar Close)
+[Feature Standardizer (feature_standardizer.py)]
+ ├── 24/7 Continuous Memory FracDiff (d=0.40)
+ ├── GARCH-Proxy Volatility (EWM Window: 20)
+ └── Standardized Indicators (RSI-14, MACD, ATR, ADX, BBANDS)
+         │
+         ▼
+[Crypto Strategy Cluster]
+ ├── Freqtrade Adapter (NostalgiaForInfinityX)
+ ├── Bollinger Dip Buyer (CombinedBinHAndCluc)
+ └── Funding Rate Delta-Neutral Yield Strategy
+         │
+         ▼
+[Crypto Risk Bounds: 1x to 5x Leverage | Max 20 Daily Trades]
+```
+
+2.2 US EQUITIES & FUTURES PIPELINE (Session-Gated Flow)
+```
+[Alpaca REST API / CME SSF Screener]
+         │ (RTH Session Filter: Mon-Fri 09:30 - 16:00 ET)
+         ▼
+[Session-Aware Feature Engine]
+ ├── 48-Hour Weekend-Paused FracDiff (Preserves stationarity without jump gaps)
+ ├── CFTC Disaggregated COT Macro Bias (CME Institutional Positioning)
+ └── Single-Exchange CME Order Book Imbalance
+         │
+         ▼ (Every 15m/30m Bar Close)
+[US Stocks Strategy Cluster]
+ ├── Opening Range Breakout (ORB 15m/30m momentum)
+ ├── VPOC Value Area Mean Reversion (Targeting high volume nodes)
+ └── 55 CME SSF Momentum Screener Rotation
+         │
+         ▼
+[Equities Risk Bounds: 1x to 10x Leverage | Max 80 Daily Trades]
+```
+
+
+3. TRDENG 9-LAYER EXECUTION CADENCE PIPELINE
+--------------------------------------------------------------------------------
+When any strategy outputs an actionable signal (`|direction| > 0.05` and `conviction >= 0.50`),
+it enters the strict 9-layer sequential gating cadence:
+
+```
+[Incoming Strategy Signal: direction, conviction, symbol]
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 1: Regime Classification (HMM Volatility Model)  │
+│ Checks if market volatility matches strategy regime.   │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 2: Meta-Aggregator Dynamic Weight Blending       │
+│ Blends strategy signal with ML ensemble & COT bias.    │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 3: IFF Flow Score & Directional Veto Gate        │
+│ Vetoes long if CVD is strongly negative; scales size.  │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 4: Dead-Day Percentile Filter (Chop Detector)    │
+│ Vetoes if Range/ATR < 0.85, RVOL < 0.70, RealVol < 0.8%│
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 5: Dynamic Leverage Curve                        │
+│ Calculates leverage (1x-5x Crypto, 1x-10x Stocks) with │
+│ ATR stretch penalty: L_effective = L_base * (1 - pen)  │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 6: Goal & Risk Gating Module                     │
+│ Hard Ceiling: Has -$1000 monthly loss been breached?   │
+│ Daily Trade Ceiling: 20 Crypto / 80 Stocks hit?        │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 7: Micro-Buffer Dwell Veto                       │
+│ Holds order for 5ms to verify opposing tick absence.   │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 8: LOB Imbalance Filter                          │
+│ Rejects aggressive market buy if asks are thin.        │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────┐
+│ LAYER 9: VPOC / VAH / VAL Take-Profit Snapping         │
+│ Snaps TP1 and TP2 to structural volume profile nodes.  │
+└─────────────────────────┬──────────────────────────────┘
+                          │
+                          ▼
+                [APPROVED ORDER RELEASE]
+                 ├── To Simulated OMS
+                 └── To Live CCXT Exchange Gateway
+```
+
+
+4. CONCURRENCY, THREADING & STATE PERSISTENCE
+--------------------------------------------------------------------------------
+
+4.1 State Management (`core/symbol_state.py`)
+  • Thread-safe singleton (`SymbolStateRegistry`) maintaining historical OHLCV bars,
+    active positions, real-time ticks, and incremental VAP bins in RAM.
+  • Uses fine-grained reader-writer locks (`threading.RLock`) per symbol to prevent
+    race conditions during simultaneous tick ingestion and bar calculations.
+
+4.2 Decision Auditing (`core/decision_trace.py`)
+  • Every decision that passes or fails Layer 1 through 9 writes an asynchronous
+    diagnostic record to `decision_trace.jsonl` and MongoDB Atlas `gate_rejections`.
+  • Non-blocking fire-and-forget logging guarantees that disk I/O never adds latency
+    to the active trade execution path.
+
+4.3 Execution Router Bridge (`execution/`)
+  • Seamless abstraction between `SimulatedOMS` (paper trading) and `LiveCCXTRouter`
+    (production exchange APIs).
+  • Both routers enforce 6-decimal micro-crypto precision, ATR trailing stops, and
+    immediate emission of `position_update` events matching `SCHEMA.md`.
+
+4.4 Database Interaction Cadence: Zero-Tick Principle & Periodic Interval Flushes
+  • Zero Live Ticks in DB: High-frequency market ticks (5ms-20ms) are strictly in-memory
+    (`SymbolStateRegistry`) and streamed directly via WebSocket to the frontend.
+  • Trade-Driven Immediate Writes: Only fills, position entries, and exits trigger
+    asynchronous writes to MongoDB `trades`, `positions`, and `account`.
+  • Periodic Background Flushes: Non-frontend operational data is buffered in RAM and
+    written at scheduled intervals via a lightweight background task:
+      - Quota & circuit breaker status: Flushed every 30 seconds.
+      - Gate rejections & decision traces: Batch-inserted every 60 seconds.
+      - Strategy performance metrics (Sharpe/Win-rate): Flushed every 5 minutes.
+================================================================================

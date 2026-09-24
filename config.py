@@ -48,8 +48,11 @@ DATA_INTERVAL: str = "1Day"      # Alpaca timeframe: 1Min, 5Min, 1Hour, 1Day
 POLL_INTERVAL_SECONDS: int = 3   # Reduced to 3 seconds for REAL-TIME Mark-To-Market updates
 
 FRAC_DIFF_D: float = 0.4         # fractional-differentiation order (0 < d < 1)
-VOL_WINDOW: int = 5              # rolling window (bars) for GARCH-proxy vol
+FRAC_DIFF_MAX_WIDTH: int = 100    # maximum window width for FFD
+VOL_WINDOW: int = 20             # rolling window (bars) for GARCH-proxy vol (was 5)
 RSI_PERIOD: int = 14             # RSI look-back
+USE_CLOSED_BARS: bool = False    # set True once triage confirms closed bars
+MAX_STOP_PCT: float = 0.25       # stop distance never exceeds 25 % of price
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FEATURE PRE-PROCESSOR  (PP)
@@ -141,7 +144,7 @@ ACTIVE_RISK_PROFILE: str = "Balanced" # Default profile
 
 MIN_CONFIDENCE_THRESHOLD: float = 0.20 # Lowered to allow bot to immediately execute trades
 PAPER_TRADING_ENABLED: bool = True     # Re-enable bot OMS execution
-USE_SIMULATED_FUTURES: bool = True     # Bypass Alpaca and use local simulated futures engine
+USE_SIMULATED_FUTURES: bool = False     # Bypass Alpaca and use local simulated futures engine
 FUTURES_LEVERAGE: float = float(os.environ.get("MAX_LEVERAGE", "10.0"))
 INITIAL_CAPITAL: float = float(os.environ.get("INITIAL_CAPITAL", "1000.0"))
 
@@ -170,6 +173,7 @@ REDIS_CHANNEL_VAP_STATE:  str = "tedeng:vap_state"
 # S_flow veto threshold: if ML direction opposes flow AND |S_flow| > this → veto
 # e.g. LONG signal with S_flow < -0.5 → blended_signal set to 0.0
 IFF_VETO_THRESHOLD: float = 0.5
+IFF_SOFT_SCALE: float = 0.5      # soft-scale coefficient for IFF gate
 
 # VAP histogram settings
 VAP_BIN_COUNT: int = 500           # number of fixed price bins per instrument

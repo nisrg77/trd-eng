@@ -1,0 +1,102 @@
+================================================================================
+TRDENG — STORAGE ARCHITECTURE & SUGGESTIONS SPECIFICATION
+File: info/storage_plan.txt
+Version: 5.0 (Multi-Tier Quant Storage Blueprint)
+================================================================================
+
+1. EXECUTIVE STORAGE BLUEPRINT
+--------------------------------------------------------------------------------
+A high-frequency algorithmic trading engine deals with 5 distinct types of data.
+Using a single database for everything causes performance degradation and high costs.
+We enforce a specialized 5-Tier Storage Hierarchy:
+
+Data Category             | Optimal Storage Medium   | Storage Location / Path
+--------------------------|--------------------------|-----------------------------------------
+1. Strategy Logic & Code  | Git Python Plugins       | `strategies/{crypto,stocks,ai}/`
+2. Configs & Live State   | Hybrid (SQLite + Mongo)  | Local `trading.db` + MongoDB Atlas
+3. Historical Market Data | Apache Parquet (Columnar)| `data/parquet/{symbol}/{timeframe}.parquet`
+4. Model Weights & AI     | ONNX Runtime / JIT       | `model_weights/*.onnx`
+5. Backtests & Tuning     | Optuna SQLite + HTML     | `research/optuna.db` & `reports/`
+
+
+2. DETAILED STORAGE TIERS & SUGGESTIONS
+--------------------------------------------------------------------------------
+
+2.1 STRATEGY STORAGE: THE HYBRID DUAL-STORE SUGGESTION
+------------------------------------------------------
+Problem:
+  If the live trading engine relies strictly on a cloud database (like MongoDB Atlas) 
+  to read strategy configurations on every cycle, a temporary Wi-Fi blip or 200ms 
+  cloud latency spike will freeze the trade execution loop.
+
+Solution (Strongly Recommended):
+  Implement a "Local-First with Cloud Mirror" pattern:
+  • Primary Read Source (Microsecond): Local embedded SQLite (`data/trading.db`) or 
+    JSON snapshot (`strategies_state.json`).
+  • Secondary Cloud Mirror (Async): MongoDB Atlas.
+  • How it works:
+    1. Strategy configs & live parameters are read locally in < 0.1ms.
+    2. Any parameter updates made via the Next.js UI or Optuna are written to MongoDB.
+    3. A background task syncs MongoDB -> local SQLite every 30 seconds.
+    4. Result: Zero network dependency on the critical execution path!
+
+2.2 HISTORICAL CANDLES: PARQUET OVER CSV & MONGODB
+--------------------------------------------------
+Problem:
+  Storing 5 years of 1-minute historical candles for 50 instruments produces 
+  over 12 million rows. Storing this in MongoDB Atlas is slow and costly; 
+  storing in CSV takes gigabytes of disk space and takes 30+ seconds to load.
+
+Solution:
+  Use Apache Parquet (`.parquet`) via `pyarrow` or `duckdb`:
+  • Columnar compression: 85% to 90% smaller file sizes than CSV.
+  • Blazing read speeds: Loads 1 million bars into Pandas in < 150ms.
+  • File structure:
+    `data/parquet/BTC-USD_15m.parquet`
+    `data/parquet/ETH-USD_15m.parquet`
+    `data/parquet/AAPL_15m.parquet`
+
+2.3 AI & DEEP RL MODEL WEIGHTS: ONNX SERIALIZATION
+--------------------------------------------------
+Problem:
+  Loading PyTorch or TensorFlow directly inside live execution loops introduces
+  heavy memory footprints (1GB+ RAM), slow import times, and package conflicts.
+
+Solution:
+  Serialize all trained FinRL / SB3 / Ridge / XGBoost models to `.onnx`:
+  • Storage location: `model_weights/finrl_policy.onnx`
+  • Execution engine: `onnxruntime` (C++ optimized, zero PyTorch dependency).
+  • Inference latency: Sub-millisecond (< 0.8ms per bar).
+
+2.4 OPTUNA HYPERPARAMETER TUNING: SQLITE PERSISTENCE
+---------------------------------------------------
+Problem:
+  In-memory Optuna studies lose all progress if the script stops or the machine reboots.
+
+Solution:
+  Use Optuna's native SQLite storage engine:
+  • `storage="sqlite:///research/optuna_study.db"`
+  • Benefits:
+    1. Resumable: You can pause a 1,000-trial optimization and resume anytime.
+    2. Multi-Process: Run 4 worker scripts simultaneously sharing the same database.
+    3. Instant Visual Dashboard: Launch `optuna-dashboard sqlite:///research/optuna_study.db` 
+       to see interactive 3D hyperparameter response surfaces in your browser.
+
+2.5 AUDIT TRAILS & TEARSHEETS: HTML + JSONL
+-------------------------------------------
+• Decision Traces: Append-only `decision_trace.jsonl` (atomic, non-blocking disk writes).
+• QuantStats Reports: Interactive HTML files stored in `reports/tearsheets/*.html`.
+  These files are static, portable, and viewable in any web browser without a backend.
+
+
+3. SUMMARY RECOMMENDATION MATRIX
+--------------------------------------------------------------------------------
+Component           | Current State          | Recommended Upgrade
+--------------------|------------------------|-----------------------------------------
+Strategy Registry   | Hardcoded in code      | `strategies/` directory + MongoDB config
+Historical Feeds    | In-memory / CSV cache  | Apache Parquet local cache
+Tuning Studies      | None                   | Optuna SQLite (`research/optuna.db`)
+RL Model Checkpoint | Raw PyTorch weights    | Serialized ONNX (`model_weights/*.onnx`)
+Live Telemetry      | In-memory WebSockets   | Keep In-memory WS (Zero DB tick load)
+Trade Fills & PnL   | MongoDB Atlas          | Keep MongoDB Atlas (Immediate async push)
+================================================================================

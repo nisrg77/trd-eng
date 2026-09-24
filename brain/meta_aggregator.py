@@ -28,22 +28,17 @@ import numpy as np
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
+from core.patch_helpers import annualized_to_daily_vol
 
 log = logging.getLogger(__name__)
 
 
-def _detect_regime(garch_vol: float, trend_metric: float = 0.0) -> str:
-    """
-    Classify current market regime based on GARCH-proxy volatility and directional drift.
-    """
-    if garch_vol > config.REGIME_VOL_THRESHOLD_HIGH:
-        return "high_volatility"
-    elif garch_vol < config.REGIME_VOL_THRESHOLD_LOW:
-        return "low_volatility"
-    elif trend_metric > 0.005:
-        return "trending_up"
-    else:
-        return "trending"
+def _detect_regime(garch_vol: float, trend_metric: float = 0.0, thresholds=None) -> str:
+    lo, hi = thresholds or (config.REGIME_VOL_THRESHOLD_LOW, config.REGIME_VOL_THRESHOLD_HIGH)
+    if garch_vol > hi:            return "high_volatility"
+    elif garch_vol < lo:          return "low_volatility"
+    elif trend_metric > 0.005:    return "trending_up"
+    else:                         return "trending"
 
 
 class MetaAggregator:
@@ -67,6 +62,8 @@ class MetaAggregator:
         trend_metric: float = 0.0,
         instrument: str = "",
         obi_rho: float = 0.0,
+        vol_thresholds=None,
+        vol_is_annualized: bool = False,
     ) -> dict:
         """
         Parameters
@@ -84,7 +81,9 @@ class MetaAggregator:
         dict with keys: blended_signal, regime_flag, per_model, weights_used
         (S_composite is untouched at this stage; IFF gate is applied downstream)
         """
-        regime = _detect_regime(garch_vol, trend_metric)
+        if vol_is_annualized:
+            garch_vol = annualized_to_daily_vol(garch_vol)      # `garch_vol` is now DAILY vol by contract
+        regime = _detect_regime(garch_vol, trend_metric, vol_thresholds)
         weights = self.weight_table.get(regime, self.weight_table.get("trending", {"ridge": 0.34, "xgb": 0.33, "lstm": 0.33}))
 
         blended = (

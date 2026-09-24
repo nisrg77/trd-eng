@@ -1,0 +1,99 @@
+graph TD
+    subgraph Market_Feeds["Market Data Ingestion (Layer 0)"]
+        BINANCE["Binance Perpetuals WS<br/>(aggTrade / depth20)"]
+        CME["CME SSF / US Equities<br/>(Polygon / Alpaca / TV)"]
+        COINGECKO["Macro / Funding Index<br/>(8h Funding Rate API)"]
+    end
+
+    subgraph Microstructure["Microstructure & Feature Pipeline (Layer 1)"]
+        MBUFF["Async MicroBuffer<br/>(Tick Aggregation & Lockless Queue)"]
+        CFEED["ChartFeed Service<br/>(In-Memory 1s/5s/1m Candles)"]
+        OFI["Order Flow Engine<br/>(CVD v2.1 + VPOC + OBI Depth)"]
+    end
+
+    subgraph Quant_ML["Quant & Regime Engine (Layer 2)"]
+        HMM["3-State Gaussian HMM<br/>(Bull / Bear / High-Chop)"]
+        GARCH["GARCH(1,1)<br/>(Dynamic Volatility & ATR Bands)"]
+        ENSEMBLE["Multi-Model Ensemble<br/>(LightGBM + XGBoost + RF)"]
+        DEAD_DAY["P10 Dead-Day Filter<br/>(Volume & Regime Gating)"]
+    end
+
+    subgraph Strategy_Sleeves["Execution Sleeves (Layer 3)"]
+        subgraph Crypto_Sleeve["Crypto Sleeve (20% NAV / $200 Cap)"]
+            NFI["NFI Predictive Breakout"]
+            FUND_ARB["Perp Funding Rate Arb"]
+            VOL_MOM["Crypto Vol Momentum"]
+        end
+        subgraph Equities_Sleeve["US Equities Sleeve (80% NAV / $800 Cap)"]
+            ORB["15-Min Opening Range Breakout"]
+            SECTOR_MOM["RVOL Top Sector Momentum"]
+            MEAN_REV["Ornstein-Uhlenbeck Reversion"]
+        end
+    end
+
+    subgraph Risk_Governance["Risk & Safety Governance (Layer 4)"]
+        CAPITAL_STOP["$1,000 Capital Depletion Stop<br/>(Full System Stop on Exhaustion)"]
+        QUOTA["Atomic Quota Manager<br/>(quota_state.json: 20 Crypto / 80 Stock Daily Quota)"]
+        KILL_SWITCH["Manual Emergency Kill Switch<br/>(Immediate Entry Halt)"]
+    end
+
+    subgraph Execution_OMS["Order Management & Routing (Layer 5)"]
+        ROUTER["Smart Order Router"]
+        SIM_OMS["Simulated 10x Margin Engine<br/>(Realistic Slippage & Fill Logic)"]
+        CCXT_GATEWAY["CCXT / Broker Gateway<br/>(Binance / Alpaca REST/WS)"]
+    end
+
+    subgraph Messaging_Distribution["Event & WebSocket Layer (Layer 6)"]
+        EBUS["Async EventBus<br/>(Typed Event Routing)"]
+        WS_MGR["WebSocket Manager<br/>(Deduplication & Channel Subscriptions)"]
+        WS_TRADING["/ws/trading<br/>(State, Orders, Risk, ML Health)"]
+        WS_CHARTS["/ws/charts<br/>(Dedicated High-Frequency Candle Feed)"]
+    end
+
+    subgraph Frontend_UI["Institutional Frontend Dashboard (Layer 7)"]
+        CRYPTO_UI["Crypto Perpetuals Terminal<br/>(TradingView Chart + L2 Depth + Funding)"]
+        STOCK_UI["US Futures Terminal<br/>(15-Min TV Screener + Positions)"]
+        LOGS_UI["Trade Logs & Audit Terminal<br/>(Atomic Logs + Quota Gauges)"]
+    end
+
+    %% Pipeline Connections
+    BINANCE --> MBUFF
+    CME --> MBUFF
+    COINGECKO --> OFI
+
+    MBUFF --> CFEED
+    MBUFF --> OFI
+
+    OFI --> HMM
+    OFI --> GARCH
+    HMM --> ENSEMBLE
+    GARCH --> ENSEMBLE
+    ENSEMBLE --> DEAD_DAY
+
+    DEAD_DAY --> NFI
+    DEAD_DAY --> FUND_ARB
+    DEAD_DAY --> VOL_MOM
+    DEAD_DAY --> ORB
+    DEAD_DAY --> SECTOR_MOM
+    DEAD_DAY --> MEAN_REV
+
+    NFI & FUND_ARB & VOL_MOM --> QUOTA
+    ORB & SECTOR_MOM & MEAN_REV --> QUOTA
+
+    QUOTA --> CAPITAL_STOP
+    CAPITAL_STOP --> ROUTER
+
+    ROUTER --> SIM_OMS
+    ROUTER --> CCXT_GATEWAY
+
+    SIM_OMS & CCXT_GATEWAY --> EBUS
+    CFEED --> WS_CHARTS
+
+    EBUS --> WS_MGR
+    WS_MGR --> WS_TRADING
+
+    WS_TRADING --> CRYPTO_UI
+    WS_TRADING --> STOCK_UI
+    WS_TRADING --> LOGS_UI
+    WS_CHARTS --> CRYPTO_UI
+    WS_CHARTS --> STOCK_UI

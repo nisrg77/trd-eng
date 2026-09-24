@@ -32,3 +32,6 @@ dstree.*
 
 # Next.js build cache
 frontend/.next/
+frontend/tsconfig.tsbuildinfo
+*.onnx
+research/rl/runs/

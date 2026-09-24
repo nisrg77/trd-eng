@@ -1,0 +1,214 @@
+================================================================================
+TRDENG — EVENT HANDLING ARCHITECTURE & TAXONOMY SPECIFICATION
+File: info/event_handling.txt
+Version: 5.0 (Asynchronous, Decoupled Event-Driven Core)
+================================================================================
+
+1. EVENT-DRIVEN PHILOSOPHY
+--------------------------------------------------------------------------------
+TRDENG is an event-driven system operating on strict asynchronous message passing.
+Components never call each other's execution routines synchronously. 
+
+Core Invariants:
+  1. Non-Blocking Event Loops : No event handler may execute synchronous I/O, 
+                                heavy training, or network blocking loops.
+  2. Idempotency              : Every event carries a unique `event_id` (UUIDv4).
+                                Duplicate events within 500ms are discarded.
+  3. Failure Isolation        : An unhandled exception in Strategy A's event handler
+                                will NEVER crash the event bus or disrupt Strategy B.
+  4. Priority Scheduling      : Fill and Risk events always preempt market tick events.
+
+
+2. EVENT TAXONOMY & PRIORITY QUEUES
+--------------------------------------------------------------------------------
+The Event Engine maintains 3 internal priority lanes:
+
+  LANE 0: CRITICAL (Priority: IMMEDIATE / PREEMPTIVE)
+  ----------------------------------------------------
+  • EVENT_CIRCUIT_BREAKER_TRIPPED : -$1000 loss ceiling or 4% daily limit breached.
+  • EVENT_ORDER_FILLED            : Order executed on exchange / simulated OMS.
+  • EVENT_POSITION_LIQUIDATED     : Position forced exit / emergency stop.
+
+  LANE 1: EXECUTION & GATING (Priority: HIGH, Target latency: <2ms)
+  ----------------------------------------------------
+  • EVENT_STRATEGY_SIGNAL_EMITTED : Strategy output (direction, conviction).
+  • EVENT_AGGREGATED_SIGNAL       : Blended composite signal from Meta-Aggregator.
+  • EVENT_ORDER_PROPOSED          : Proposed position size & leverage.
+  • EVENT_GATE_APPROVED           : All 9 risk layers passed; order released to venue.
+  • EVENT_GATE_REJECTED           : Order vetoed (Dead-Day, Ceiling, LOB Imbalance).
+
+  LANE 2: TELEMETRY & FEEDS (Priority: STANDARD, Loss-tolerant backpressure)
+  ----------------------------------------------------
+  • EVENT_RAW_TICK_INGESTED       : Binance `aggTrade` or Alpaca real-time tick.
+  • EVENT_BAR_CLOSED              : 1m / 5m / 15m OHLCV bar finalization.
+  • EVENT_FEATURES_UPDATED        : TA-Lib / pandas-ta indicators recomputed.
+  • EVENT_WEBSOCKET_BROADCAST     : Client UI update (matching SCHEMA.md).
+
+
+3. END-TO-END EVENT LIFECYCLE (THE 10-STEP PIPELINE)
+--------------------------------------------------------------------------------
+
+[Market Feed]
+      │ (Step 1: Ingest)
+      ▼
+EVENT_RAW_TICK_INGESTED ────────► [VAP / CVD Incremental Histogram]
+      │                                       │
+      ▼ (Step 2: Aggregate)                   │
+EVENT_BAR_CLOSED (15m)                        ▼
+      │ (Step 3: Extract)             [Micro-Buffer Hold (5ms)]
+      ▼
+EVENT_FEATURES_UPDATED (pandas-ta / FracDiff)
+      │
+      ├───────────────────────┬───────────────────────┐
+      ▼ (Step 4: Evaluate)    ▼                       ▼
+ [Crypto NFI Strategy]  [BinH & Cluc]          [US ORB Breakout]
+      │                       │                       │
+      └───────────────────────┼───────────────────────┘
+                              ▼ (Step 5: Emit)
+                 EVENT_STRATEGY_SIGNAL_EMITTED
+                              │
+                              ▼ (Step 6: Blend)
+                 [Hybrid Meta-Aggregator]
+                              │
+                              ▼
+                 EVENT_AGGREGATED_SIGNAL
+                              │
+                              ▼ (Step 7: Size)
+                 [Kelly / ATR Dynamic Sizing]
+                              │
+                              ▼
+                 EVENT_ORDER_PROPOSED
+                              │
+                              ▼ (Step 8: Gate)
+                 [TRDENG 9-Layer Risk Gating]
+                 ├── Dead-Day Filter
+                 ├── -$1000 Monthly Loss Cap
+                 ├── 20/80 Trade Ceilings
+                 └── Dynamic Leverage Curve
+                    /                     \
+       (Vetoed)    /                       \ (Approved)
+                  v                         v
+     EVENT_GATE_REJECTED           EVENT_GATE_APPROVED
+            │                               │
+            ▼ (Log to DB)                   ▼ (Step 9: Route)
+    [gate_rejections]              [OMS Execution Router]
+                                   ├── Simulated OMS
+                                   └── Live CCXT Gateway
+                                            │
+                                            ▼ (Step 10: Broadcast)
+                                   EVENT_ORDER_FILLED
+                                            │
+                               ┌────────────┴────────────┐
+                               ▼                         ▼
+                      [MongoDB Trades / Pos]    EVENT_WEBSOCKET_BROADCAST
+                                                         │
+                                                         ▼
+                                                [Next.js Stitch UI]
+
+
+4. EVENT SCHEMAS (STRICT PYTHON TYPED DICTIONARIES)
+--------------------------------------------------------------------------------
+
+4.1 Signal Event (`EVENT_STRATEGY_SIGNAL_EMITTED`)
+```python
+{
+    "event_id": "evt_sig_4f92c10b",
+    "event_type": "STRATEGY_SIGNAL_EMITTED",
+    "timestamp_utc": 1698245612.482,
+    "payload": {
+        "strategy_id": "crypto_nfi_01",
+        "asset_class": "crypto",
+        "symbol": "BTC-USD",
+        "direction": 0.85,           # +1.0 Long, -1.0 Short, 0.0 Neutral
+        "conviction": 0.92,          # 0.0 to 1.0 confidence score
+        "suggested_stop_pct": 0.035, # Optional ATR trailing stop target
+        "metadata": {
+            "rsi_14": 28.4,
+            "bb_lower_breach": True,
+            "flow_score": 0.72
+        }
+    }
+}
+```
+
+4.2 Order Fill Event (`EVENT_ORDER_FILLED`)
+```python
+{
+    "event_id": "evt_fill_9921a44c",
+    "event_type": "ORDER_FILLED",
+    "timestamp_utc": 1698245612.510,
+    "payload": {
+        "trade_id": "trd_8f1a92b4",
+        "strategy_id": "crypto_nfi_01",
+        "symbol": "BTC-USD",
+        "side": "long",
+        "size": 0.45,
+        "fill_price": 86500.00,
+        "leverage": 3.5,
+        "venue": "SIMULATED_OMS",
+        "fees_usd": 1.25,
+        "stop_loss_price": 83472.50,
+        "take_profit_price": 88150.00 # Snapped to VPOC
+    }
+}
+```
+
+4.3 Outbound WebSocket Broadcast (Conforms Strictly to `SCHEMA.md`)
+```python
+{
+    "type": "position_update",
+    "timestamp": "2026-09-24T12:35:00.000Z",
+    "data": {
+        "trade_id": "trd_8f1a92b4",
+        "symbol": "BTC-USD",
+        "instrument": "BTC-USD",
+        "side": "long",
+        "size": 0.45,
+        "qty": 0.45,
+        "leverage": 3.5,
+        "entry_price": 86500.0,
+        "exit_price": null,
+        "mark_price": 86750.0,
+        "unrealized_pnl": 112.50,
+        "realized_pnl": null,
+        "status": "open",
+        "opened_at": "2026-09-24T12:35:00.000Z",
+        "closed_at": null
+    }
+}
+```
+
+
+5. BACKPRESSURE, TIMING BUDGETS & DEAD-LETTER QUEUE (DLQ)
+--------------------------------------------------------------------------------
+
+5.1 Latency Budgets (Target: End-to-End Decision Loop < 15ms)
+  • Tick Ingestion & Feature Buffer Update : < 1.5 ms
+  • Strategy Signal Evaluation (Pure Func) : < 2.0 ms
+  • Meta-Aggregator Blending               : < 0.8 ms
+  • 9-Layer Gating & Risk Verification     : < 1.2 ms
+  • Order Dispatch (Simulated OMS)         : < 0.5 ms
+  • Order Dispatch (Live CCXT REST/WS)     : < 12.0 ms
+  • WebSocket UI Broadcast Dispatch        : < 1.0 ms
+
+5.2 Backpressure Management
+  • Fast Market Drop Policy: If incoming ticks exceed 5,000 ticks/sec, 
+    intermediate price ticks are collapsed/sampled. Bar aggregation and order fill
+    events are NEVER dropped under any circumstances.
+  • Worker Isolation: Strategy evaluation runs on a dedicated background ThreadPool
+    (max_workers=4) preventing UI WebSocket broadcast stalls.
+
+5.3 Dead-Letter Queue (DLQ)
+  • Any event that raises an exception across 3 retries is pushed to `DLQ_EVENTS`
+    in memory and appended to `decision_trace.jsonl` with error stack trace.
+  • The trading engine continues normal execution without interruption.
+
+5.4 Database Event Dispatch Policy (Zero-Tick Architecture)
+  • TICK events NEVER trigger database writes. They are held in RAM and streamed
+    via WebSocket to the frontend.
+  • ORDER_FILLED / POSITION_MUTATED events trigger immediate asynchronous database
+    updates to MongoDB `trades`, `positions`, and `account`.
+  • Non-frontend events (gate rejections, decision traces, quota health) are queued
+    in memory and written to MongoDB in periodic batch intervals (every 30s-60s)
+    to protect system throughput and prevent database connection saturation.
+================================================================================
