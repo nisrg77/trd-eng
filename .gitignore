@@ -26,8 +26,8 @@ screener_targets.json
 quota_state.json
 goal.txt
 *.png
-*.csv
-export_*.py
+/export_*.py
+!research/rl/export_onnx.py
 dstree.*
 
 # Next.js build cache

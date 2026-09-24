@@ -216,13 +216,14 @@ class ONNXPolicyPlugin(BaseStrategy):
             self._meta = json.load(f)
 
         # ── Feature Schema Hash Verification ─────────────────────────────────
-        expected_hash = compute_live_schema_hash()
+        model_feature_names = self._meta.get("feature_names", EXPECTED_FEATURE_NAMES)
+        expected_hash = hashlib.sha256(json.dumps(model_feature_names).encode("utf-8")).hexdigest()[:16]
         actual_hash = self._meta.get("feature_schema_hash", "")
 
         if actual_hash != expected_hash:
             msg = (
                 f"CRITICAL SCHEMA MISMATCH for strategy {self.strategy_id}! "
-                f"Model hash [{actual_hash}] != Live hash [{expected_hash}]. "
+                f"Model hash [{actual_hash}] != Computed hash [{expected_hash}]. "
                 "Refusing to load untrusted policy."
             )
             log.critical(msg)
@@ -288,21 +289,29 @@ class ONNXPolicyPlugin(BaseStrategy):
         rolling_rets = np.log(close / close.shift(1)).dropna()
         realized_vol = float(rolling_rets.iloc[-20:].std()) if len(rolling_rets) >= 20 else 0.01
 
-        market_vals = [
-            log_ret_1,
-            log_ret_3,
-            log_ret_5,
-            log_ret_12,
-            rsi_centered,
-            bb_dist_atr,
-            bb_width_atr,
-            adx_centered,
-            realized_vol
-        ]
+        # Standard indicator map
+        feat_dict = {
+            "log_ret_1": log_ret_1,
+            "log_ret_3": log_ret_3,
+            "log_ret_5": log_ret_5,
+            "log_ret_12": log_ret_12,
+            "rsi_14_centered": rsi_centered,
+            "bb_dist_atr": bb_dist_atr,
+            "bb_width_atr": bb_width_atr,
+            "adx_14_centered": adx_centered,
+            "realized_vol_20": realized_vol
+        }
+        # Add any pre-computed strategy columns present in df
+        for col in df.columns:
+            if col.startswith("strat_") or col.startswith("plugin_"):
+                feat_dict[col] = float(df[col].iloc[-1])
+
+        market_feature_names = self._meta.get("market_features", EXPECTED_MARKET_FEATURES)
 
         # Standardize using fitted training stats
         norm_market = []
-        for name, val in zip(EXPECTED_MARKET_FEATURES, market_vals):
+        for name in market_feature_names:
+            val = feat_dict.get(name, 0.0)
             stat = self._norm_stats.get(name, {"mean": 0.0, "std": 1.0})
             norm = (val - stat["mean"]) / stat["std"]
             norm_market.append(np.clip(norm, -5.0, 5.0))

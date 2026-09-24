@@ -36,7 +36,7 @@ from execution.cost_model import CostModel, CostModelConfig, cost_model
 
 log = logging.getLogger(__name__)
 
-MARKET_FEATURE_NAMES = [
+BASE_MARKET_FEATURE_NAMES = [
     "log_ret_1",
     "log_ret_3",
     "log_ret_5",
@@ -48,11 +48,14 @@ MARKET_FEATURE_NAMES = [
     "realized_vol_20"
 ]
 
-ALL_FEATURE_NAMES = MARKET_FEATURE_NAMES + [
+POSITION_FEATURE_NAMES = [
     "current_position",
     "unrealized_pnl_atr",
     "bars_in_trade_norm"
 ]
+
+MARKET_FEATURE_NAMES = list(BASE_MARKET_FEATURE_NAMES)
+ALL_FEATURE_NAMES = list(BASE_MARKET_FEATURE_NAMES) + list(POSITION_FEATURE_NAMES)
 
 ACTION_MAP = {
     0: -1.0,  # SHORT
@@ -64,31 +67,61 @@ ACTION_MAP = {
 class ObservationNormalizer:
     """
     Fits feature standardization (mean, std) on the training split only,
-    and serializes/deserializes stats to disk.
+    supporting dynamic strategy/plugin features, and serializes/deserializes stats to disk.
     """
 
-    def __init__(self, stats: Optional[Dict[str, Dict[str, float]]] = None) -> None:
+    def __init__(
+        self,
+        stats: Optional[Dict[str, Dict[str, float]]] = None,
+        feature_names: Optional[List[str]] = None
+    ) -> None:
         self.stats = stats or {}
+        self.feature_names = feature_names or list(BASE_MARKET_FEATURE_NAMES)
 
-    def fit(self, df: pd.DataFrame) -> None:
-        """Computes mean and std for each market feature on train split."""
+    def fit(self, df: pd.DataFrame, extra_features: Optional[List[str]] = None) -> None:
+        """
+        Computes mean and std for base market features plus any extra strategy/plugin features.
+        Automatically detects all columns starting with 'strat_' or 'plugin_' if not provided.
+        """
         self.stats = {}
-        for col in MARKET_FEATURE_NAMES:
+        feature_list = list(BASE_MARKET_FEATURE_NAMES)
+        if extra_features is not None:
+            detected_extras = extra_features
+        else:
+            detected_extras = [
+                c for c in df.columns 
+                if (c.startswith("strat_") or c.startswith("plugin_")) and c not in feature_list
+            ]
+        
+        for col in detected_extras:
+            if col not in feature_list:
+                feature_list.append(col)
+                
+        self.feature_names = feature_list
+
+        for col in self.feature_names:
             if col in df.columns:
-                vals = df[col].dropna().values
-                mean_val = float(np.mean(vals)) if len(vals) > 0 else 0.0
-                std_val = float(np.std(vals)) if len(vals) > 0 else 1.0
-                self.stats[col] = {
-                    "mean": mean_val,
-                    "std": max(1e-6, std_val)
-                }
+                # For discrete/bounded strategy signals (-1.0, 0.0, 1.0), preserve directional semantics
+                if col.startswith("strat_") or col.startswith("plugin_"):
+                    self.stats[col] = {
+                        "mean": 0.0,
+                        "std": 1.0
+                    }
+                else:
+                    vals = df[col].dropna().values
+                    mean_val = float(np.mean(vals)) if len(vals) > 0 else 0.0
+                    std_val = float(np.std(vals)) if len(vals) > 0 else 1.0
+                    self.stats[col] = {
+                        "mean": mean_val,
+                        "std": max(1e-6, std_val)
+                    }
             else:
                 self.stats[col] = {"mean": 0.0, "std": 1.0}
 
     def normalize_market_features(self, row: pd.Series) -> np.ndarray:
         """Transforms a single bar's market features using fitted stats."""
         norm_vals = []
-        for col in MARKET_FEATURE_NAMES:
+        for col in self.feature_names:
             raw_val = float(row.get(col, 0.0))
             stat = self.stats.get(col, {"mean": 0.0, "std": 1.0})
             norm = (raw_val - stat["mean"]) / stat["std"]
@@ -97,21 +130,33 @@ class ObservationNormalizer:
 
     def save(self, filepath: str) -> None:
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        payload = {
+            "stats": self.stats,
+            "feature_names": self.feature_names
+        }
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(self.stats, f, indent=2)
+            json.dump(payload, f, indent=2)
 
     @classmethod
     def load(cls, filepath: str) -> ObservationNormalizer:
         with open(filepath, "r", encoding="utf-8") as f:
-            stats = json.load(f)
-        return cls(stats)
+            data = json.load(f)
+        if isinstance(data, dict) and "stats" in data and "feature_names" in data:
+            return cls(stats=data["stats"], feature_names=data["feature_names"])
+        elif isinstance(data, dict):
+            return cls(stats=data, feature_names=list(data.keys()))
+        return cls()
 
 
 def prepare_market_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Computes standard causal features and log-return lags on OHLCV data.
+    Computes standard causal features and log-return lags on OHLCV data,
+    preserving any pre-injected strategy/plugin signals.
     """
+    plugin_cols = {c: df[c].values for c in df.columns if c.startswith("strat_") or c.startswith("plugin_")}
     out = compute_standard_features(df)
+    for c, arr in plugin_cols.items():
+        out[c] = arr
     close = out["close"].astype(np.float64)
 
     # 1. Log Returns over multiple lags
@@ -167,13 +212,18 @@ class TradingEnv(gym.Env):
         # Precompute causal features
         self.df = prepare_market_features(df).reset_index(drop=True)
         self.normalizer = normalizer or ObservationNormalizer()
+        if not self.normalizer.stats or not hasattr(self.normalizer, "feature_names") or not self.normalizer.feature_names:
+            self.normalizer.fit(self.df)
+
+        self.market_feature_names = list(self.normalizer.feature_names)
+        self.all_feature_names = self.market_feature_names + list(POSITION_FEATURE_NAMES)
 
         # Define Gym spaces
         self.action_space = spaces.Discrete(3)  # 0: Short, 1: Flat, 2: Long
         self.observation_space = spaces.Box(
             low=-5.0,
             high=5.0,
-            shape=(len(ALL_FEATURE_NAMES),),
+            shape=(len(self.all_feature_names),),
             dtype=np.float32
         )
 
@@ -303,10 +353,11 @@ class TradingEnv(gym.Env):
 
         # Drawdown and turnover penalties
         drawdown = max(0.0, (self.peak_equity - self.equity) / self.peak_equity)
-        dd_penalty = self.config.drawdown_penalty_weight * drawdown
+        # Apply drawdown penalty only when active in position (never punish sitting in cash)
+        dd_penalty = self.config.drawdown_penalty_weight * drawdown if abs(self.current_position) > 1e-7 else 0.0
         turnover_penalty = self.config.turnover_penalty_weight * abs(target_pos - old_pos)
 
-        # Reward = net return minus penalties
+        # Reward = net return minus penalties (guaranteed 0.0 when flat)
         reward = float(r_step - cost_rate - dd_penalty - turnover_penalty)
 
         # Advance step

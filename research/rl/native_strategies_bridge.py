@@ -62,10 +62,10 @@ class NativeStrategiesBridge:
         # Standardize features once
         df_feat = compute_standard_features(df.copy())
 
-        # Evaluate over sliding causal windows
+        # Evaluate over sliding causal windows (capped to 120 bars to ensure O(1) per step)
         min_lookback = 30
         for i in range(min_lookback, n):
-            sub_df = df_feat.iloc[:i + 1]
+            sub_df = df_feat.iloc[max(0, i - 120):i + 1]
 
             # 1. Bollinger Pattern
             p_bb = self.strat_bb.generate_signal(symbol, sub_df)
