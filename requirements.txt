@@ -10,7 +10,7 @@ statsmodels>=0.14.0
 pyarrow>=15.0.0
 
 # --- Technical Indicators & Modern Feature Engineering ---
-pandas-ta
+git+https://github.com/twopirllc/pandas-ta.git@main
 
 # --- Rapid Vectorized Backtesting & Screening ---
 vectorbt>=0.26.0
