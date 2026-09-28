@@ -10,7 +10,7 @@ statsmodels>=0.14.0
 pyarrow>=15.0.0
 
 # --- Technical Indicators & Modern Feature Engineering ---
-pandas-ta>=0.3.14b0
+pandas-ta
 
 # --- Rapid Vectorized Backtesting & Screening ---
 vectorbt>=0.26.0
