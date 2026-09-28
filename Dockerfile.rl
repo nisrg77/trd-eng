@@ -1,5 +1,5 @@
 # Dockerfile.rl — Isolated Heavy PyTorch / Gymnasium / Streamlit Container for TRDENG RL Subsystem
-FROM python:3.11-slim
+FROM python:3.11
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
