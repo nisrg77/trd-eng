@@ -4,7 +4,6 @@
 numpy>=1.26.0
 pandas>=2.0.0
 scipy>=1.12.0
-pandas-ta==0.3.14b
 torch>=2.0.0
 onnx>=1.15.0
 onnxruntime>=1.17.0
