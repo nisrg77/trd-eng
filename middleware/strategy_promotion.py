@@ -516,3 +516,54 @@ class StrategyPromotionManager:
 # Governance Singleton
 promotion_manager = StrategyPromotionManager()
 
+
+def register_and_deploy_candidate(
+    strategy_id: str,
+    name: str,
+    asset_class: str,
+    onnx_model_path: str,
+    meta_path: Optional[str] = None,
+    params: Optional[Dict[str, Any]] = None,
+    sleeve_id: str = "sleeve_ai_shadow"
+) -> Dict[str, Any]:
+    """
+    Registers an exported ONNX policy candidate with strategy promotion governance
+    and instantiates it strictly in SHADOW MODE inside the live kernel.
+    Tracks paper performance via ShadowPnLTracker without placing live broker orders.
+    """
+    record = promotion_manager.register_rl_candidate(
+        strategy_id=strategy_id,
+        name=name,
+        asset_class=asset_class,
+        onnx_model_path=onnx_model_path,
+        meta_path=meta_path,
+        params=params
+    )
+
+    from strategies.ai.onnx_policy_plugin import ONNXPolicyPlugin
+    plugin = ONNXPolicyPlugin(
+        strategy_id=strategy_id,
+        name=name,
+        asset_class=asset_class,
+        onnx_model_path=onnx_model_path,
+        meta_path=meta_path,
+        shadow_mode=True,  # STRICT INVARIANT: Always shadow mode
+        sleeve_id=sleeve_id,
+        params=params or {}
+    )
+
+    # Register in strategy registry if available
+    try:
+        from strategies.strategy_registry import strategy_registry
+        strategy_registry.register(plugin)
+    except Exception as e:
+        log.debug("[StrategyPromotion] Note on registry registration: %s", e)
+
+    return {
+        "record": record,
+        "plugin": plugin,
+        "shadow_mode": plugin.shadow_mode,
+        "weights_sha256": record["weights_sha256"],
+        "feature_schema_hash": record["feature_schema_hash"]
+    }
+

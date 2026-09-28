@@ -50,4 +50,33 @@ services:
     ports:
       - "6379:6379"
 
+  # -------------------------------------------------------------
+  # Isolated RL Subsystem (PyTorch / SB3 / Streamlit Dashboard)
+  # -------------------------------------------------------------
+  rl-trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.rl
+    container_name: trdeng-rl-trainer
+    restart: unless-stopped
+    volumes:
+      - ./model_weights:/app/model_weights
+      - ./middleware:/app/middleware
+    command: ["python", "-c", "from research.rl.live_paper_trainer import LivePaperTrainer, LivePaperTrainerConfig; LivePaperTrainer(LivePaperTrainerConfig()).start_live_session()"]
+
+  rl-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.rl
+    container_name: trdeng-rl-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./model_weights:/app/model_weights
+      - ./middleware:/app/middleware
+    command: ["streamlit", "run", "research/rl/streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+    depends_on:
+      - rl-trainer
+
 

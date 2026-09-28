@@ -82,7 +82,7 @@ def test_onnx_export_file_and_metadata_structure(trained_sb3_fixture):
     # 2. Assert required metadata fields
     assert meta["model_name"] == "test_model"
     assert meta["feature_names"] == ALL_FEATURE_NAMES
-    assert len(meta["feature_names"]) == 12
+    assert len(meta["feature_names"]) == 20
     assert "normalization_stats" in meta
     assert "git_hash" in meta
     assert meta["seed"] == 42

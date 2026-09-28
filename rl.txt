@@ -29,98 +29,197 @@ TRDENG/
 ├── research/
 │   ├── quant-trading/                  <-- Quant strategies repository
 │   └── rl/
-│       ├── trading_env.py              <-- Cost-aware Gymnasium Environment (12-dim)
-│       ├── quant_strategy_bridge.py    <-- Bridge to quant-trading strategies (Dual Thrust, AO, etc.)
+│       ├── trading_env.py              <-- Cost-aware Gymnasium Environment (12-dim Base)
+│       ├── quant_strategy_bridge.py    <-- Bridge to quant signals (Dual Thrust, AO, HA, RSI)
+│       ├── imitation.py                <-- MaxEnt Inverse RL & Behavior Cloning Warm Start
 │       ├── train_rl.py                 <-- Purged Walk-Forward PPO Trainer & Benchmarking
 │       ├── export_onnx.py              <-- PyTorch Actor -> ONNX Model & Metadata Exporter
 │       └── runs/                       <-- Saved training runs, artifacts, and ONNX models
 ├── strategies/
-│   └── ai/
-│       ├── __init__.py                 <-- Exports ONNXPolicyPlugin & ShadowPnLTracker
-│       └── onnx_policy_plugin.py       <-- Sub-millisecond live ONNX inference plugin
+│   ├── ai/
+│   │   ├── __init__.py                 <-- Exports ONNXPolicyPlugin & ShadowPnLTracker
+│   │   └── onnx_policy_plugin.py       <-- Sub-millisecond live ONNX inference plugin
+│   └── discovered/
+│       └── reverse_built_composite_strategy.py <-- IRL-weighted consensus strategy with dynamic leverage
 ├── execution/
 │   └── cost_model.py                   <-- Institutional transaction cost model
 └── middleware/
     └── strategy_promotion.py           <-- Staged governance & paper soak evaluation
 
 
-3. INPUTS & OUTPUTS (INP / OP)
+3. OBSERVATION STATE SPACE & DIMENSIONS
+--------------------------------------------------------------------------------
+The environment (`TradingEnv`) and live inference engine (`ONNXPolicyPlugin`)
+operate on a continuous Box state space bounded between [-5.0, +5.0] via
+`ObservationNormalizer`.
+
+A. BASE STATE SPACE: 12 DIMENSIONS (s_t in R^12)
+   Divided into 9 Causal Market Features and 3 Position / Execution Features:
+
+   --- Group 1: Causal Market Features (Indices 0 to 8) ---
+   [0] log_ret_1          : 1-bar log return: ln(Close_t / Close_{t-1})
+   [1] log_ret_3          : 3-bar log return: ln(Close_t / Close_{t-3})
+   [2] log_ret_5          : 5-bar log return: ln(Close_t / Close_{t-5})
+   [3] log_ret_12         : 12-bar log return: ln(Close_t / Close_{t-12})
+   [4] rsi_14_centered    : 14-period RSI normalized around zero:
+                            (RSI_14 - 50.0) / 50.0  ∈ [-1.0, +1.0]
+   [5] bb_dist_atr        : ATR-normalized distance to Bollinger middle band:
+                            (Close_t - Bollinger_Middle_20) / ATR_14
+   [6] bb_width_atr       : ATR-normalized Bollinger Band bandwidth:
+                            (Bollinger_Upper_20 - Bollinger_Lower_20) / ATR_14
+   [7] adx_14_centered    : 14-period ADX normalized around baseline trend:
+                            (ADX_14 - 25.0) / 25.0
+   [8] realized_vol_20    : 20-bar rolling standard deviation of 1-bar log returns
+
+   --- Group 2: Position & Execution Context Features (Indices 9 to 11) ---
+   [9] current_position   : Current active position state:
+                            -1.0 = Short,  0.0 = Flat,  +1.0 = Long
+   [10] unrealized_pnl_atr: Unrealized profit/loss measured in ATR units:
+                            (Close_t - EntryPrice) * current_position / ATR_14
+   [11] bars_in_trade_norm: Normalized duration since current trade entry:
+                            min(1.0, bars_elapsed / 50.0)
+
+B. EXTENSIBLE STATE SPACE (12 + K DIMENSIONS):
+   `ObservationNormalizer` dynamically accommodates auxiliary quant and plugin
+   signals. When extra strategy columns (prefixed with `strat_` or `plugin_`)
+   are present in the dataset:
+   - Discrete/bounded strategy signals maintain directional semantics (mean=0.0, std=1.0).
+   - The state vector smoothly scales to 12 + K dimensions, preserving schema
+     integrity via SHA-256 feature-list hashing in `model_meta.json`.
+
+C. NORMALIZATION SPECIFICATION:
+   - Fitted strictly on the training fold (`ObservationNormalizer.fit()`) to prevent data leakage.
+   - Live transformation: norm = np.clip((raw_val - mean) / max(std, 1e-6), -5.0, 5.0).
+   - Serialized into `normalizer.json` and bundled inside `model_meta.json`.
+
+D. ACTION SPACE: DISCRETE(3)
+   - Action 0: SHORT (-1.0 target position)
+   - Action 1: FLAT  ( 0.0 target position)
+   - Action 2: LONG  (+1.0 target position)
+   - Enforces configurable `min_holding_bars` (default: 3 to 5 bars) to eliminate churn.
+
+
+4. QUANT-TRADING STRATEGIES & SIGNALS USED
+--------------------------------------------------------------------------------
+The bridge module `research/rl/quant_strategy_bridge.py` integrates classic quantitative
+trading strategies from `research/quant-trading/` directly into the RL framework:
+
+A. CORE QUANT STRATEGY SIGNALS:
+   1. Dual Thrust Breakout (`QuantStrategyBridge.dual_thrust_signals`):
+      - Michael Chalek opening range breakout.
+      - Range = max(HH - LC, HC - LL) over lookback period (default: 20 bars).
+      - Buy Trigger  = Open + (k1 * Range)  --> +1.0 (Long)
+      - Sell Trigger = Open - (k2 * Range)  --> -1.0 (Short)
+      - Preserves trend via forward-filling until reversal.
+
+   2. Awesome Oscillator (`QuantStrategyBridge.awesome_oscillator_signals`):
+      - Bill Williams momentum oscillator.
+      - AO = SMA(Median_Price, 5) - SMA(Median_Price, 34)
+      - Long Signal (+1.0)  : AO > 0 and AO > AO_{t-1} (Green bar above zero line)
+      - Short Signal (-1.0) : AO < 0 and AO < AO_{t-1} (Red bar below zero line)
+      - Flat (0.0) otherwise.
+
+   3. Heikin-Ashi Trend Following (`QuantStrategyBridge.heikin_ashi_signals`):
+      - Modified candlestick trend filtering:
+        HA_Close = (Open + High + Low + Close) / 4
+        HA_Open  = (HA_Open_{prev} + HA_Close_{prev}) / 2
+      - Long Signal (+1.0)  : HA_Close > HA_Open and Low == HA_Open (No lower shadow; strong uptrend)
+      - Short Signal (-1.0) : HA_Close < HA_Open and High == HA_Open (No upper shadow; strong downtrend)
+
+   4. RSI Pattern / Mean Reversion (`QuantStrategyBridge.rsi_pattern_signals`):
+      - 14-period Relative Strength Index boundary reversion.
+      - Long Signal (+1.0)  : RSI < 30.0 (Oversold condition reversal)
+      - Short Signal (-1.0) : RSI > 70.0 (Overbought condition reversal)
+
+   5. Bollinger Reversion Baseline (`BollingerReversionStrategy`):
+      - Mean-reversion envelope with 20-period SMA and 2.0 standard deviation bands.
+      - Enters mean reversion when price touches outer envelope with ATR stops.
+
+B. HOW THE RL SUBSYSTEM USES THESE QUANT SIGNALS:
+   - 1. Multi-Baseline Benchmarking:
+     Every RL walk-forward fold is benchmarked against all 8 baselines:
+     [Flat, Buy & Hold, Random, Bollinger Reversion, Dual Thrust, Awesome Oscillator, Heikin-Ashi, RSI Pattern].
+   - 2. Deflated Sharpe Ratio (DSR):
+     DSR tests whether RL performance constitutes true alpha or data snooping over multiple tests.
+   - 3. Observation Feature Injection:
+     Quant signals can be fed directly as additional state features (e.g. `strat_dual_thrust`).
+   - 4. Consensus Expert Demonstrations:
+     Multi-strategy consensus acts as an expert oracle for Behavior Cloning and Inverse RL.
+
+
+5. INVERSE REINFORCEMENT LEARNING (IRL) & REVERSE RL
+--------------------------------------------------------------------------------
+TRDENG incorporates Inverse Reinforcement Learning (IRL) and Reverse-Engineered
+Policy derivation in three core components:
+
+A. MAXIMUM ENTROPY INVERSE REINFORCEMENT LEARNING (`MaxEntIRLDiagnostic` in `research/rl/imitation.py`):
+   - What it does:
+     Traditional RL requires manually engineering reward weights (drawdown penalty,
+     turnover penalty, holding penalty). MaxEnt IRL inverts this problem: given observed
+     expert trading trajectories, it infers the implicit reward weights that best explain
+     the expert's risk/return preferences.
+   - Formulation:
+     * Feature expectations of expert behavior: μ_expert
+     * Feature expectations of baseline policy: μ_baseline
+     * Gradient ascent weight update:
+         θ ← θ + α * (μ_expert - μ_baseline)
+     * Regularized via L2 weight decay (0.98 multiplier per iteration).
+     * Normalizes recovered weights so sum(|θ|) = 1.
+   - Recovered Implied Objectives:
+     * `return`        : Weight placed on cumulative log returns
+     * `drawdown`      : Implicit penalty weight on peak-to-trough equity drawdowns
+     * `turnover`      : Implicit cost sensitivity to excessive portfolio churning
+     * `holding_time`  : Preference for trade duration persistence
+
+B. BEHAVIOR CLONING (BC) WARM START (`warm_start_ppo_with_bc` in `research/rl/imitation.py`):
+   - Reverse-Engineered Policy Initialization:
+     Pure random exploration in financial RL often encounters ruin before discovering profitable regimes.
+     TRDENG extracts consensus actions from expert quant signals:
+     * Evaluates bars where at least `consensus_threshold` (e.g. >= 3 of 4) quant strategies agree.
+     * Maps agreement into expert actions {-1: Short -> 0, 0: Flat -> 1, +1: Long -> 2}.
+     * Supervised pre-training of the PPO actor network via Cross-Entropy Loss:
+         Loss = -∑ y_expert * log(softmax(actor_logits))
+     * Result: PPO begins environmental exploration with a grounded, non-random initial policy.
+
+C. REVERSE-BUILT INVERSE RL COMPOSITE STRATEGY (`ReverseBuiltCompositeStrategy` in `strategies/discovered/reverse_built_composite_strategy.py`):
+   - A production-ready strategy derived from MaxEnt IRL implicit weighting and expert consensus:
+   - Architecture & Mechanics:
+     1. IRL-Derived Consensus Weights:
+        - Dual Thrust Breakout    : 0.30
+        - Awesome Oscillator      : 0.25
+        - Heikin-Ashi Trend       : 0.25
+        - RSI Pattern Reversion   : 0.20
+     2. Composite Score & Direction:
+        Composite_Score = ∑ (w_i * Signal_i)
+        * Composite_Score >= +0.25 -> Long  (+1.0)
+        * Composite_Score <= -0.25 -> Short (-1.0)
+        * Otherwise               -> Flat   ( 0.0)
+     3. Conviction Metric:
+        conviction = (agreement_count / 4.0) * |Composite_Score|
+        Trade is filtered out if conviction < 0.15.
+     4. Dynamic Volatility-Damped Leverage Sizing (1.0x to 10.0x):
+        - Scales leverage dynamically based on conviction and 14-period ATR volatility.
+        - Low ATR volatility + high conviction -> scale leverage up to 10x.
+        - High ATR volatility -> damp leverage down to prevent account breach.
+        - Risk-capped leverage guarantees that a 2 * ATR stop never breaches the 6% max loss limit.
+     5. Account Constraints:
+        - Strict capital: $1,000.00
+        - Profit target: 8.0% ($80.00)
+        - Max loss stop: 6.0% ($60.00)
+
+
+6. STEP-BY-STEP USAGE WORKFLOW
 --------------------------------------------------------------------------------
 
-A. INPUT DATA (Market OHLCV Dataframe):
-   Required columns for feature extraction:
-   - timestamp : Epoch seconds or datetime
-   - open      : Bar open price (float)
-   - high      : Bar high price (float)
-   - low       : Bar low price (float)
-   - close     : Bar close price (float)
-   - volume    : Bar trading volume (float)
-
-B. RL OBSERVATION VECTOR (12-Dimensional State Space s_t in R^12):
-   Features are standardized using training-set mean and standard deviation:
-   [0] log_ret_1          : 1-bar log return (log(Close_t / Close_{t-1}))
-   [1] log_ret_3          : 3-bar log return
-   [2] log_ret_5          : 5-bar log return
-   [3] log_ret_12         : 12-bar log return
-   [4] rsi_14_centered    : (RSI_14 - 50) / 50.0  [-1.0 to +1.0]
-   [5] bb_dist_atr        : (Close - Bollinger_Middle) / ATR_14
-   [6] bb_width_atr       : (Bollinger_Upper - Bollinger_Lower) / ATR_14
-   [7] adx_14_centered    : (ADX_14 - 25) / 25.0
-   [8] realized_vol_20    : 20-bar rolling standard deviation of log returns
-   [9] current_position   : Current position state (-1.0 = Short, 0.0 = Flat, +1.0 = Long)
-   [10] unrealized_pnl_atr: Unrealized PnL in ATR units: (Price - EntryPrice) * Pos / ATR
-   [11] bars_in_trade_norm: Normalized duration in trade: min(1.0, bars / 50.0)
-
-C. OUTPUT ACTION SPACE (Discrete(3)):
-   Action 0 = SHORT (-1.0 target position)
-   Action 1 = FLAT  ( 0.0 target position)
-   Action 2 = LONG  (+1.0 target position)
-
-D. PRODUCED TRAINING ARTIFACTS:
-   1. `model.onnx`: Frozen neural network actor (input: `observation` [batch, 12], output: `logits` [batch, 3]).
-   2. `model_meta.json`: Provenance metadata containing:
-      - `feature_schema_hash`: 16-character SHA-256 hash of expected feature names.
-      - `training_config_hash`: SHA-256 hash of training hyperparameters.
-      - `normalization_stats`: Per-feature mean and std fitted strictly on train split.
-      - `git_commit_hash`: Git version provenance.
-      - `seed`: Random seed used for training.
-   3. `run_summary.json`: Walk-forward performance, baseline comparisons, and DSR.
-
-
-4. QUANT-TRADING STRATEGY INTEGRATION
---------------------------------------------------------------------------------
-The bridge module `research/rl/quant_strategy_bridge.py` connects classic quantitative
-strategies from `research/quant-trading/` directly into the RL pipeline:
-
-Integrated Strategies:
-1. Dual Thrust Breakout (`QuantStrategyBridge.dual_thrust_signals`):
-   Michael Chalek opening range breakout.
-2. Awesome Oscillator (`QuantStrategyBridge.awesome_oscillator_signals`):
-   Bill Williams momentum zero-cross filter.
-3. Heikin-Ashi Trend (`QuantStrategyBridge.heikin_ashi_signals`):
-   Modified candlestick trend smoothing.
-4. RSI Pattern Recognition (`QuantStrategyBridge.rsi_pattern_signals`):
-   Multi-bar momentum reversal signals.
-
-How RL Uses Them:
-- Multi-Baseline Benchmarking: Every RL fold is benchmarked against all 8 baselines
-  (Flat, Buy & Hold, Random, Bollinger Reversion, Dual Thrust, Awesome Oscillator,
-  Heikin-Ashi, RSI Pattern) under identical transaction costs.
-- Deflated Sharpe Ratio (DSR): Proves statistically that the RL model is not
-  snooping and genuinely generates excess alpha beyond simple rule-based algorithms.
-
-
-5. STEP-BY-STEP USAGE WORKFLOW
---------------------------------------------------------------------------------
-
-STEP 1: TRAIN RL POLICY OFFLINE
+STEP 1: TRAIN RL POLICY OFFLINE (WITH OPTIONAL BC WARM START)
 Run walk-forward PPO training across purged splits:
 ```python
 import pandas as pd
 from research.rl.train_rl import run_walk_forward_training, TrainRLConfig
+from research.rl.imitation import extract_expert_demonstrations, warm_start_ppo_with_bc
 
 # 1. Load historical data
-df = pd.read_parquet("data/BTC_USDT_1h.parquet")  # or pd.read_csv(...)
+df = pd.read_parquet("data/BTC_USDT_1h.parquet")
 
 # 2. Configure training
 cfg = TrainRLConfig(
@@ -133,7 +232,10 @@ cfg = TrainRLConfig(
     output_dir="research/rl/runs"
 )
 
-# 3. Execute walk-forward training & baseline benchmarking
+# 3. Optional: Extract demonstrations & warm-start with BC / IRL
+# obs_expert, act_expert = extract_expert_demonstrations(df, consensus_threshold=3)
+
+# 4. Execute walk-forward training & baseline benchmarking
 results = run_walk_forward_training(df, config=cfg)
 print(f"Overall Verdict: {results['verdict']}")
 print(f"Deflated Sharpe Ratio: {results['summary_metrics']['overall_dsr']}")
@@ -225,7 +327,7 @@ if ok:
 ```
 
 
-6. TRANSACTION COST MODEL SPECIFICATION
+7. TRANSACTION COST MODEL SPECIFICATION
 --------------------------------------------------------------------------------
 Both training (`TradingEnv`) and live shadow tracking (`ShadowPnLTracker`) use
 the institutional cost model in `execution/cost_model.py`:
@@ -238,7 +340,7 @@ Parameters:
 - Total Transaction Cost = Taker Fee + Spread + Slippage
 
 
-7. TROUBLESHOOTING & COMMON ERRORS
+8. TROUBLESHOOTING & COMMON ERRORS
 --------------------------------------------------------------------------------
 Error: `CRITICAL SCHEMA MISMATCH for strategy ...`
 Cause: Feature names in `model_meta.json` do not match live `EXPECTED_FEATURE_NAMES`.

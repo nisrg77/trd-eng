@@ -1,10 +1,15 @@
 """
-research/rl/trading_env.py — Cost-Aware Gymnasium Trading Environment
+research/rl/trading_env.py — Cost-Aware Gymnasium Trading Environment (20-Dim)
 
-Strictly causal, no-lookahead RL environment for offline training:
-1. Observation Space (12-dim Box):
-   - Causal market features (log returns lags 1, 3, 5, 12, RSI-14, ATR-distance to BB, BB width, ADX-14, 20-bar realized vol).
-   - Position state (current position, unrealized PnL in ATR units, bars in trade).
+Strictly causal, no-lookahead RL environment for offline and paper training:
+1. Observation Space (20-dim Box bounded [-5.0, 5.0]):
+   - Base Causal Market Features (9-dim): log returns (lags 1, 3, 5, 12), RSI-14 centered,
+     ATR-distance to BB, BB width, ADX-14 centered, 20-bar realized vol.
+   - Microstructure & Sentiment Features (8-dim): OFI, normalized spread, queue depletion
+     velocity, VPIN, CVD / 20-bar volume, block trade density, event polarity shift,
+     volatility anticipation index.
+   - Position & Context Features (3-dim): current position, unrealized PnL in ATR units,
+     normalized bars in trade.
    - Standardized via ObservationNormalizer fit strictly on TRAIN split.
 2. Action Space (Discrete(3)):
    - 0 = Short (-1.0), 1 = Flat (0.0), 2 = Long (+1.0).
@@ -14,8 +19,9 @@ Strictly causal, no-lookahead RL environment for offline training:
 4. Transaction Costs:
    - Evaluated via execution/cost_model.py (taker fee, spread, ATR slippage).
 5. Reward Formulation:
-   - Position * log-return - transaction_costs - drawdown_penalty - turnover_penalty.
-   - Guaranteed: Flat policy yields reward exactly 0.0.
+   - Supports pluggable IRL reward functions (IRLRewardFunction) or default
+     cost-penalized, drawdown-penalized return.
+   - Invariant: Flat policy yields reward exactly 0.0.
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ import json
 import math
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional, Tuple, List, Callable
 
 import numpy as np
 import pandas as pd
@@ -33,6 +39,10 @@ from gymnasium import spaces
 
 from data_pipeline.feature_standardizer import compute_standard_features
 from execution.cost_model import CostModel, CostModelConfig, cost_model
+from research.rl.features import (
+    MICROSTRUCTURE_FEATURE_NAMES,
+    MicrostructureFeatureExtractor
+)
 
 log = logging.getLogger(__name__)
 
@@ -54,8 +64,8 @@ POSITION_FEATURE_NAMES = [
     "bars_in_trade_norm"
 ]
 
-MARKET_FEATURE_NAMES = list(BASE_MARKET_FEATURE_NAMES)
-ALL_FEATURE_NAMES = list(BASE_MARKET_FEATURE_NAMES) + list(POSITION_FEATURE_NAMES)
+MARKET_FEATURE_NAMES = list(BASE_MARKET_FEATURE_NAMES) + list(MICROSTRUCTURE_FEATURE_NAMES)
+ALL_FEATURE_NAMES = list(MARKET_FEATURE_NAMES) + list(POSITION_FEATURE_NAMES)
 
 ACTION_MAP = {
     0: -1.0,  # SHORT
@@ -68,6 +78,7 @@ class ObservationNormalizer:
     """
     Fits feature standardization (mean, std) on the training split only,
     supporting dynamic strategy/plugin features, and serializes/deserializes stats to disk.
+    Clips all normalized values to [-5.0, 5.0].
     """
 
     def __init__(
@@ -76,15 +87,15 @@ class ObservationNormalizer:
         feature_names: Optional[List[str]] = None
     ) -> None:
         self.stats = stats or {}
-        self.feature_names = feature_names or list(BASE_MARKET_FEATURE_NAMES)
+        self.feature_names = feature_names or list(MARKET_FEATURE_NAMES)
 
     def fit(self, df: pd.DataFrame, extra_features: Optional[List[str]] = None) -> None:
         """
-        Computes mean and std for base market features plus any extra strategy/plugin features.
+        Computes mean and std for base + microstructure market features plus any extra strategy/plugin features.
         Automatically detects all columns starting with 'strat_' or 'plugin_' if not provided.
         """
         self.stats = {}
-        feature_list = list(BASE_MARKET_FEATURE_NAMES)
+        feature_list = list(MARKET_FEATURE_NAMES)
         if extra_features is not None:
             detected_extras = extra_features
         else:
@@ -119,7 +130,7 @@ class ObservationNormalizer:
                 self.stats[col] = {"mean": 0.0, "std": 1.0}
 
     def normalize_market_features(self, row: pd.Series) -> np.ndarray:
-        """Transforms a single bar's market features using fitted stats."""
+        """Transforms a single bar's market features using fitted stats, clipped to [-5.0, 5.0]."""
         norm_vals = []
         for col in self.feature_names:
             raw_val = float(row.get(col, 0.0))
@@ -150,8 +161,8 @@ class ObservationNormalizer:
 
 def prepare_market_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Computes standard causal features and log-return lags on OHLCV data,
-    preserving any pre-injected strategy/plugin signals.
+    Computes standard causal features, log-return lags, and 8 microstructure
+    dimensions on OHLCV data, preserving any pre-injected strategy/plugin signals.
     """
     plugin_cols = {c: df[c].values for c in df.columns if c.startswith("strat_") or c.startswith("plugin_")}
     out = compute_standard_features(df)
@@ -160,10 +171,10 @@ def prepare_market_features(df: pd.DataFrame) -> pd.DataFrame:
     close = out["close"].astype(np.float64)
 
     # 1. Log Returns over multiple lags
-    out["log_ret_1"] = np.log(close / close.shift(1)).fillna(0.0)
-    out["log_ret_3"] = np.log(close / close.shift(3)).fillna(0.0)
-    out["log_ret_5"] = np.log(close / close.shift(5)).fillna(0.0)
-    out["log_ret_12"] = np.log(close / close.shift(12)).fillna(0.0)
+    out["log_ret_1"] = np.log(close / close.shift(1).clip(lower=1e-6)).fillna(0.0)
+    out["log_ret_3"] = np.log(close / close.shift(3).clip(lower=1e-6)).fillna(0.0)
+    out["log_ret_5"] = np.log(close / close.shift(5).clip(lower=1e-6)).fillna(0.0)
+    out["log_ret_12"] = np.log(close / close.shift(12).clip(lower=1e-6)).fillna(0.0)
 
     # 2. RSI centered around 0
     out["rsi_14_centered"] = (out["rsi_14"] - 50.0) / 50.0
@@ -179,22 +190,29 @@ def prepare_market_features(df: pd.DataFrame) -> pd.DataFrame:
     # 5. Realized Volatility (rolling 20 std of log returns)
     out["realized_vol_20"] = out["log_ret_1"].rolling(20, min_periods=1).std().fillna(0.01)
 
+    # 6. Microstructure, Order Book, Institutional & Sentiment Features
+    out = MicrostructureFeatureExtractor.compute_features_df(out)
+
     return out
 
 
 @dataclass
 class TradingEnvConfig:
-    initial_equity: float = 10000.0
+    initial_equity: float = 1000.0
     min_holding_bars: int = 5
     drawdown_penalty_weight: float = 0.1
     turnover_penalty_weight: float = 0.001
+    holding_penalty_weight: float = 0.0005
     cost_config: CostModelConfig = field(default_factory=CostModelConfig)
     notional_usd: float = 1000.0
-
+    reward_fn: Optional[Callable[[Dict[str, Any]], float]] = None
+    target_return_pct: float = 7.0  # 7% for crypto, 4% for US stocks
+    max_leverage: float = 30.0
+    max_daily_trades: int = 20
 
 class TradingEnv(gym.Env):
     """
-    Cost-aware, zero-lookahead Gymnasium trading environment.
+    Cost-aware, zero-lookahead Gymnasium trading environment with 20-dim state space.
     """
 
     metadata = {"render_modes": ["human"]}
@@ -209,7 +227,7 @@ class TradingEnv(gym.Env):
         self.config = config or TradingEnvConfig()
         self.cost_model = CostModel(self.config.cost_config)
 
-        # Precompute causal features
+        # Precompute causal features (base + microstructure)
         self.df = prepare_market_features(df).reset_index(drop=True)
         self.normalizer = normalizer or ObservationNormalizer()
         if not self.normalizer.stats or not hasattr(self.normalizer, "feature_names") or not self.normalizer.feature_names:
@@ -248,6 +266,9 @@ class TradingEnv(gym.Env):
         # Start after warm-up bars to ensure features are stable
         warmup_bars = 20
         self.current_step = warmup_bars
+        if self.current_step >= self.max_steps:
+            self.current_step = max(0, self.max_steps - 5)
+
         self.current_position = 0.0
         self.entry_price = 0.0
         self.bars_in_trade = 0
@@ -260,23 +281,27 @@ class TradingEnv(gym.Env):
         info = {
             "step": self.current_step,
             "equity": self.equity,
-            "position": self.current_position
+            "position": self.current_position,
+            "trade_count": self.trade_count
         }
         return obs, info
 
     def _get_observation(self) -> np.ndarray:
+        """
+        Constructs normalized observation vector:
+        [market_features (17), position_features (3)] -> 20 dims
+        """
         row = self.df.iloc[self.current_step]
         market_feats = self.normalizer.normalize_market_features(row)
 
-        # Position state features
-        close = float(row["close"])
+        curr_price = float(row["close"])
         atr = max(1e-6, float(row["atr_14"]))
-        if abs(self.current_position) > 1e-7:
-            unrealized_pnl_atr = (close - self.entry_price) * self.current_position / atr
-            bars_in_trade_norm = min(1.0, self.bars_in_trade / 50.0)
-        else:
-            unrealized_pnl_atr = 0.0
-            bars_in_trade_norm = 0.0
+
+        unrealized_pnl_atr = 0.0
+        if abs(self.current_position) > 1e-7 and self.entry_price > 0:
+            unrealized_pnl_atr = (curr_price - self.entry_price) * self.current_position / atr
+
+        bars_in_trade_norm = min(1.0, float(self.bars_in_trade) / 50.0)
 
         pos_feats = np.array([
             self.current_position,
@@ -296,7 +321,7 @@ class TradingEnv(gym.Env):
         target_pos = ACTION_MAP[int(action)]
         old_pos = self.current_position
 
-        # Enforce minimum holding period (if holding an active position, cannot change until min_holding_bars reached)
+        # Enforce minimum holding period
         if abs(old_pos) > 1e-7 and target_pos != old_pos:
             if self.bars_in_trade < self.config.min_holding_bars:
                 target_pos = old_pos  # Suppress premature exit / flip
@@ -312,7 +337,6 @@ class TradingEnv(gym.Env):
 
         # ── Return and Cost Calculation ───────────────────────────────────────
         if target_pos == old_pos:
-            # Position maintained throughout bar t -> t+1
             cost_rate = 0.0
             cost_usd = 0.0
             r_step = old_pos * np.log(c_next / c_t)
@@ -321,7 +345,6 @@ class TradingEnv(gym.Env):
             else:
                 self.bars_in_trade = 0
         else:
-            # Position transition fills at O_{t+1}
             cost_res = self.cost_model.calculate_cost(
                 price=o_next,
                 atr=atr_t,
@@ -335,13 +358,10 @@ class TradingEnv(gym.Env):
             self.total_costs_usd += cost_usd
             self.trade_count += 1
 
-            # Old position held from C_t to O_{t+1}
             r_gap = old_pos * np.log(o_next / c_t)
-            # New position held from O_{t+1} to C_{t+1}
             r_bar = target_pos * np.log(c_next / o_next)
             r_step = r_gap + r_bar
 
-            # Update position state
             self.current_position = target_pos
             self.entry_price = o_next if abs(target_pos) > 1e-7 else 0.0
             self.bars_in_trade = 1 if abs(target_pos) > 1e-7 else 0
@@ -351,19 +371,35 @@ class TradingEnv(gym.Env):
         self.equity *= np.exp(net_ret)
         self.peak_equity = max(self.peak_equity, self.equity)
 
-        # Drawdown and turnover penalties
+        # Drawdown and penalties
         drawdown = max(0.0, (self.peak_equity - self.equity) / self.peak_equity)
-        # Apply drawdown penalty only when active in position (never punish sitting in cash)
         dd_penalty = self.config.drawdown_penalty_weight * drawdown if abs(self.current_position) > 1e-7 else 0.0
         turnover_penalty = self.config.turnover_penalty_weight * abs(target_pos - old_pos)
+        duration_penalty = self.config.holding_penalty_weight * (self.bars_in_trade / 50.0) if self.bars_in_trade > 20 else 0.0
 
-        # Reward = net return minus penalties (guaranteed 0.0 when flat)
-        reward = float(r_step - cost_rate - dd_penalty - turnover_penalty)
+        # Reward evaluation (pluggable reward_fn or default)
+        if abs(old_pos) < 1e-7 and abs(target_pos) < 1e-7:
+            # Absolute invariant: Flat policy earns exactly 0.0
+            reward = 0.0
+        elif self.config.reward_fn is not None:
+            reward_metrics = {
+                "r_step": r_step,
+                "cost_rate": cost_rate,
+                "drawdown": drawdown,
+                "churn": abs(target_pos - old_pos),
+                "bars_in_trade": self.bars_in_trade,
+                "current_pos": old_pos,
+                "target_pos": target_pos,
+                "net_ret": net_ret
+            }
+            reward = float(self.config.reward_fn(reward_metrics))
+        else:
+            reward = float(r_step - cost_rate - dd_penalty - turnover_penalty - duration_penalty)
 
         # Advance step
         self.current_step += 1
         terminated = (self.current_step >= self.max_steps)
-        truncated = (self.equity <= self.config.initial_equity * 0.5)  # 50% loss circuit breaker
+        truncated = (self.equity <= self.config.initial_equity * 0.5)
 
         obs = self._get_observation()
         info = {

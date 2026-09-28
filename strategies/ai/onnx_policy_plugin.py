@@ -36,7 +36,7 @@ from middleware.system_monitor import system_monitor
 
 log = logging.getLogger(__name__)
 
-EXPECTED_FEATURE_NAMES = [
+BASE_MARKET_FEATURE_NAMES = [
     "log_ret_1",
     "log_ret_3",
     "log_ret_5",
@@ -45,18 +45,36 @@ EXPECTED_FEATURE_NAMES = [
     "bb_dist_atr",
     "bb_width_atr",
     "adx_14_centered",
-    "realized_vol_20",
+    "realized_vol_20"
+]
+
+MICROSTRUCTURE_FEATURE_NAMES = [
+    "ofi",
+    "norm_spread_atr",
+    "queue_depletion_velocity",
+    "vpin",
+    "cvd_norm_vol20",
+    "block_trade_density",
+    "event_polarity_shift",
+    "vol_anticipation_index"
+]
+
+POSITION_FEATURE_NAMES = [
     "current_position",
     "unrealized_pnl_atr",
     "bars_in_trade_norm"
 ]
 
-EXPECTED_MARKET_FEATURES = EXPECTED_FEATURE_NAMES[:9]
+EXPECTED_FEATURE_NAMES_20 = BASE_MARKET_FEATURE_NAMES + MICROSTRUCTURE_FEATURE_NAMES + POSITION_FEATURE_NAMES
+EXPECTED_FEATURE_NAMES_12 = BASE_MARKET_FEATURE_NAMES + POSITION_FEATURE_NAMES
+EXPECTED_FEATURE_NAMES = EXPECTED_FEATURE_NAMES_20
+EXPECTED_MARKET_FEATURES = BASE_MARKET_FEATURE_NAMES + MICROSTRUCTURE_FEATURE_NAMES
 
 
-def compute_live_schema_hash() -> str:
+def compute_live_schema_hash(feature_names: Optional[List[str]] = None) -> str:
     """Computes the expected canonical SHA-256 hash for the feature schema."""
-    encoded = json.dumps(EXPECTED_FEATURE_NAMES).encode("utf-8")
+    names = feature_names or EXPECTED_FEATURE_NAMES
+    encoded = json.dumps(names).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
@@ -301,6 +319,68 @@ class ONNXPolicyPlugin(BaseStrategy):
             "adx_14_centered": adx_centered,
             "realized_vol_20": realized_vol
         }
+        # Microstructure & Sentiment features (pure numpy calculation, zero PyTorch/Gym)
+        open_px = df["open"].astype(np.float64)
+        high = df["high"].astype(np.float64)
+        low = df["low"].astype(np.float64)
+        vol = df["volume"].astype(np.float64).clip(lower=1e-6)
+
+        if "ofi" in df.columns:
+            feat_dict["ofi"] = float(df["ofi"].iloc[-1])
+        else:
+            hl_r = max(1e-6, float(high.iloc[-1] - low.iloc[-1]))
+            bar_pres = (2.0 * float(close.iloc[-1]) - float(high.iloc[-1]) - float(low.iloc[-1])) / hl_r
+            vol_mean20 = float(vol.iloc[-20:].mean()) if len(vol) >= 20 else float(vol.iloc[-1])
+            feat_dict["ofi"] = float(np.clip(bar_pres * (float(vol.iloc[-1]) / max(1e-6, vol_mean20)), -5.0, 5.0))
+
+        if "norm_spread_atr" in df.columns:
+            feat_dict["norm_spread_atr"] = float(df["norm_spread_atr"].iloc[-1])
+        else:
+            spread_px = 0.1 * float(atr.iloc[-1]) * (1.0 + abs(float(close.iloc[-1]) - float(open_px.iloc[-1])) / max(1e-6, float(high.iloc[-1] - low.iloc[-1])))
+            feat_dict["norm_spread_atr"] = float(np.clip((spread_px - 0.1 * float(atr.iloc[-1])) / float(atr.iloc[-1]), -5.0, 5.0))
+
+        if "queue_depletion_velocity" in df.columns:
+            feat_dict["queue_depletion_velocity"] = float(df["queue_depletion_velocity"].iloc[-1])
+        else:
+            body = abs(float(close.iloc[-1]) - float(open_px.iloc[-1]))
+            wicks = max(0.0, float(high.iloc[-1] - low.iloc[-1]) - body)
+            w_ratio = min(10.0, wicks / max(1e-6, body))
+            v_prev = float(vol.iloc[-2]) if len(vol) >= 2 else float(vol.iloc[-1])
+            v_accel = (float(vol.iloc[-1]) / max(1e-6, v_prev)) - 1.0
+            feat_dict["queue_depletion_velocity"] = float(np.clip(np.tanh(w_ratio * v_accel), -5.0, 5.0))
+
+        if "vpin" in df.columns:
+            feat_dict["vpin"] = float(df["vpin"].iloc[-1])
+        else:
+            r1 = float(np.log(close.iloc[-1] / max(1e-6, close.iloc[-2]))) if len(close) >= 2 else 0.0
+            z_ret = r1 / max(1e-6, realized_vol)
+            b_frac = 0.5 * (1.0 + np.tanh(z_ret * math.sqrt(2.0 / math.pi)))
+            feat_dict["vpin"] = float(np.clip(abs(2.0 * b_frac - 1.0), 0.0, 1.0))
+
+        if "cvd_norm_vol20" in df.columns:
+            feat_dict["cvd_norm_vol20"] = float(df["cvd_norm_vol20"].iloc[-1])
+        else:
+            d_vol = (2.0 * (float(close.iloc[-1]) - float(low.iloc[-1])) / max(1e-6, float(high.iloc[-1] - low.iloc[-1])) - 1.0) * float(vol.iloc[-1])
+            v20_sum = float(vol.iloc[-20:].sum()) if len(vol) >= 20 else float(vol.iloc[-1])
+            feat_dict["cvd_norm_vol20"] = float(np.clip(d_vol / max(1e-6, v20_sum), -3.0, 3.0))
+
+        if "block_trade_density" in df.columns:
+            feat_dict["block_trade_density"] = float(df["block_trade_density"].iloc[-1])
+        else:
+            v_q99 = float(vol.iloc[-50:].quantile(0.99)) if len(vol) >= 20 else float(vol.iloc[-1]) * 2.0
+            feat_dict["block_trade_density"] = 1.0 if float(vol.iloc[-1]) >= v_q99 else 0.0
+
+        if "event_polarity_shift" in df.columns:
+            feat_dict["event_polarity_shift"] = float(df["event_polarity_shift"].iloc[-1])
+        else:
+            r5 = float(np.log(close.iloc[-1] / max(1e-6, close.iloc[-6]))) if len(close) >= 6 else 0.0
+            feat_dict["event_polarity_shift"] = float(np.clip(np.tanh(r5 * 10.0), -5.0, 5.0))
+
+        if "vol_anticipation_index" in df.columns:
+            feat_dict["vol_anticipation_index"] = float(df["vol_anticipation_index"].iloc[-1])
+        else:
+            feat_dict["vol_anticipation_index"] = float(np.clip(feat_dict["event_polarity_shift"] * (realized_vol / max(1e-4, float(atr.iloc[-1]) / float(close.iloc[-1]))), -5.0, 5.0))
+
         # Add any pre-computed strategy columns present in df
         for col in df.columns:
             if col.startswith("strat_") or col.startswith("plugin_"):

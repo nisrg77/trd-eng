@@ -1,0 +1,156 @@
+{
+  "model_name": "rl_btc_v3_leveraged",
+  "feature_names": [
+    "log_ret_1",
+    "log_ret_3",
+    "log_ret_5",
+    "log_ret_12",
+    "rsi_14_centered",
+    "bb_dist_atr",
+    "bb_width_atr",
+    "adx_14_centered",
+    "realized_vol_20",
+    "cvd_divergence",
+    "vpin",
+    "funding_rate_scaled",
+    "perp_spot_basis",
+    "vpoc_dist_atr",
+    "ofi_scaled",
+    "microprice_dist_atr",
+    "strat_dual_thrust",
+    "strat_awesome_oscillator",
+    "strat_heikin_ashi",
+    "strat_rsi_pattern",
+    "current_position",
+    "current_leverage",
+    "unrealized_pnl_atr",
+    "bars_in_trade_norm"
+  ],
+  "market_features": [
+    "log_ret_1",
+    "log_ret_3",
+    "log_ret_5",
+    "log_ret_12",
+    "rsi_14_centered",
+    "bb_dist_atr",
+    "bb_width_atr",
+    "adx_14_centered",
+    "realized_vol_20",
+    "cvd_divergence",
+    "vpin",
+    "funding_rate_scaled",
+    "perp_spot_basis",
+    "vpoc_dist_atr",
+    "ofi_scaled",
+    "microprice_dist_atr",
+    "strat_dual_thrust",
+    "strat_awesome_oscillator",
+    "strat_heikin_ashi",
+    "strat_rsi_pattern"
+  ],
+  "feature_schema_hash": "23cafd95bd1b4eb5",
+  "training_config_hash": "a3b99da8ba286fb0",
+  "git_hash": "9914fa458fc395207847d3cc0228708b706e2e9b",
+  "seed": 42,
+  "data_date_range": {
+    "start": "2026-01-01",
+    "end": "2026-09-01"
+  },
+  "normalization_stats": {
+    "log_ret_1": {
+      "mean": 0.0003780607256020627,
+      "std": 0.009809834006675597
+    },
+    "log_ret_3": {
+      "mean": 0.0010430995204293596,
+      "std": 0.01590853858086966
+    },
+    "log_ret_5": {
+      "mean": 0.001503134299932631,
+      "std": 0.01980232614621537
+    },
+    "log_ret_12": {
+      "mean": 0.002713269099981265,
+      "std": 0.03031066585462583
+    },
+    "rsi_14_centered": {
+      "mean": 0.01957984518022305,
+      "std": 0.21040873732145574
+    },
+    "bb_dist_atr": {
+      "mean": 0.1791489131034707,
+      "std": 1.5677174800299774
+    },
+    "bb_width_atr": {
+      "mean": 4.446245660914621,
+      "std": 2.022531265691166
+    },
+    "adx_14_centered": {
+      "mean": 0.043789924965003425,
+      "std": 0.5886852509932518
+    },
+    "realized_vol_20": {
+      "mean": 0.009732891484735122,
+      "std": 0.0015469436830341879
+    },
+    "cvd_divergence": {
+      "mean": 1.5850810904774437,
+      "std": 0.1502350201390178
+    },
+    "vpin": {
+      "mean": -0.999999999999978,
+      "std": 1e-06
+    },
+    "funding_rate_scaled": {
+      "mean": 0.0,
+      "std": 1e-06
+    },
+    "perp_spot_basis": {
+      "mean": 0.0,
+      "std": 1e-06
+    },
+    "vpoc_dist_atr": {
+      "mean": 1.2359818010722583,
+      "std": 3.407504861722153
+    },
+    "ofi_scaled": {
+      "mean": 0.005604709361496835,
+      "std": 0.9631415048459936
+    },
+    "microprice_dist_atr": {
+      "mean": -4.149984846002815e-15,
+      "std": 1e-06
+    },
+    "strat_dual_thrust": {
+      "mean": 0.0,
+      "std": 1.0
+    },
+    "strat_awesome_oscillator": {
+      "mean": 0.0,
+      "std": 1.0
+    },
+    "strat_heikin_ashi": {
+      "mean": 0.0,
+      "std": 1.0
+    },
+    "strat_rsi_pattern": {
+      "mean": 0.0,
+      "std": 1.0
+    }
+  },
+  "action_mapping": {
+    "0": "-10x",
+    "1": "-5x",
+    "2": "-2x",
+    "3": "-1x",
+    "4": "FLAT",
+    "5": "+1x",
+    "6": "+2x",
+    "7": "+5x",
+    "8": "+10x"
+  },
+  "max_leverage": 10.0,
+  "observation_dim": 24,
+  "exported_at": 1790310390.738752,
+  "exported_at_iso": "2026-09-25 04:26:30 UTC"
+}
