@@ -107,11 +107,11 @@ with col2:
 
 with col3:
     if meta_data:
-        equity = meta_data.get("performance", {}).get("current_equity", 100000.0)
-        pnl = equity - 100000.0
+        equity = meta_data.get("performance", {}).get("current_equity", 1000.0)
+        pnl = equity - 1000.0
         st.metric("Paper Equity", f"${equity:,.2f}", delta=f"${pnl:+,.2f}")
     else:
-        st.metric("Paper Equity", "$100,000.00", delta="$0.00")
+        st.metric("Paper Equity", "$1,000.00", delta="$0.00")
 
 with col4:
     if meta_data:
@@ -139,11 +139,11 @@ with tab_overview:
     np.random.seed(42)
     bars = 120
     returns = np.random.normal(0.0003, 0.002, bars)
-    equity_curve = 100000.0 * np.cumprod(1 + returns)
+    equity_curve = 1000.0 * np.cumprod(1 + returns)
     df_equity = pd.DataFrame({
         "Bar Index": np.arange(bars),
         "Equity ($)": equity_curve,
-        "Benchmark (Buy & Hold)": 100000.0 * np.cumprod(1 + np.random.normal(0.0001, 0.002, bars))
+        "Benchmark (Buy & Hold)": 1000.0 * np.cumprod(1 + np.random.normal(0.0001, 0.002, bars))
     }).set_index("Bar Index")
 
     st.line_chart(df_equity)
